@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Data Collection — Syncro5 Docs</title>
+  <meta name="description"
+    content="Sim and hardware data collection for the Syncro5 pipeline using NVIDIA Isaac Sim TiledCamera and SimDataLogger.">
+  <link rel="stylesheet" href="css/styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+</head>
+
+<body>
+
+  <nav class="navbar">
+    <button class="navbar__hamburger" aria-label="Toggle menu">☰</button>
+    <a class="navbar__brand" href="index.html">
+      <svg viewBox="0 0 120 28" fill="none">
+        <rect x="0" y="4" width="20" height="20" rx="4" fill="#E3000F" />
+        <path d="M6 18L10 10L14 18" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+        <text x="26" y="20" fill="#1a1a28" font-family="Inter,sans-serif" font-size="15"
+          font-weight="700">addverb</text>
+      </svg>
+      <span>Syncro5 <span class="brand-accent">Docs</span></span>
+    </a>
+    <div class="navbar__spacer"></div>
+    <div class="navbar__links"><a href="https://addverb.com" target="_blank">Addverb.com</a> <a
+        href="https://developer.nvidia.com/isaac" target="_blank">NVIDIA Isaac</a></div>
+  </nav>
+
+  <aside class="sidebar">
+    <div class="sidebar__section">
+      <div class="sidebar__title">Getting Started</div>
+      <a class="sidebar__link" href="index.html"><span class="icon"></span>Overview</a>
+    </div>
+    <div class="sidebar__section">
+      <div class="sidebar__title">Guide</div>
+      <a class="sidebar__link" href="architecture.html"><span class="icon"></span> Architecture &amp; Data Flow</a>
+      <a class="sidebar__link" href="api-reference.html"><span class="icon"></span> API Reference</a>
+      <a class="sidebar__link active" href="data-collection.html"><span class="icon"></span> Data Collection</a>
+      <a class="sidebar__link" href="training.html"><span class="icon"></span> Training &amp; Evaluation</a>
+    </div>
+  </aside>
+
+  <aside class="toc" id="toc"></aside>
+
+  <main class="main">
+    <div class="main__inner">
+
+      <h1>Data Collection</h1>
+      <p>How to capture teleoperation datasets in NVIDIA Isaac Sim and on the Addverb Syncro5 hardware, the dataset
+        schema, and the SimDataLogger API.</p>
+
+      <h2 id="overview">Overview</h2>
+      <p>The pipeline produces datasets in a <strong>Parquet + JPEG</strong> format compatible with <strong>NVIDIA GR00T
+          N1.6</strong> fine-tuning. A unified logging architecture ensures that both simulation and hardware captures
+        use the <strong>exact same schema</strong>, facilitating co-training strategies where sim data is augmented and
+        mixed with real grounding data.</p>
+
+      <div class="mermaid">
+        flowchart LR
+        subgraph SIM["Simulation Data Collection"]
+        SC["Teleop Client<br />(syncro_sim_client.py)"] -->|"Keyboard"| SS["Isaac Sim
+        Server<br />(syncro_sim_server.py)"]
+        SS --> LOG["Data Logger"]
+        end
+        subgraph HW["Hardware Data Collection"]
+        HC["Teleop Client<br />(Keyboard)"] -->|"ROS2"| TCP["TCP/IP Server<br />(Proprietary Stack)"]
+        TCP --> ARM["Syncro5 Robot"]
+        ARM --> LOG
+        end
+        LOG --> PQ["Dataset<br />(Parquet + JPEG)"]
+        PQ --> TR["GR00T Training"]
+
+        classDef nvidia fill:#f0fae0,stroke:#76B900,color:#2a2a3a
+        classDef addverb fill:#fce8e9,stroke:#E3000F,color:#2a2a3a
+        class SIM nvidia
+        class HW addverb
+      </div>
+
+      <h2 id="sim-collection">Sim Data Collection <span class="tag tag--nvidia">Isaac Sim</span></h2>
+
+      <h3 id="sim-step-by-step">Step-by-Step</h3>
+      <p>Data collection in NVIDIA Isaac Sim requires two terminals:</p>
+
+      <p><strong>Terminal 1 — Launch the Isaac Sim server with logging:</strong></p>
+      <pre><code class="language-bash">python server_data_logger.py --robot syncro5</code></pre>
+      <p>Starts the NVIDIA Isaac Sim environment, WebSocket API, and <code>SimDataLogger</code> (30 Hz capture).</p>
+
+      <p><strong>Terminal 2 — Connect the teleop client:</strong></p>
+      <pre><code class="language-bash">python client_with_gripper.py</code></pre>
+
+      <div class="callout callout--warning">
+        <div class="callout__title">⚠️ Important</div>
+        The logger starts recording on launch. Close the sim gracefully to trigger <code>finalize()</code> which writes
+        the Parquet files. Killing the process will lose the dataset.
+      </div>
+
+      <h3 id="sim-what-is-logged">What Gets Logged</h3>
+      <p>Every 4th physics step (~30 Hz), the NVIDIA Isaac Sim server captures:</p>
+      <ul>
+        <li><strong>Joint state</strong> — positions of the first 6 joints + gripper (7-dim vector)</li>
+        <li><strong>Action</strong> — commanded joint targets (same layout)</li>
+        <li><strong>Ego camera</strong> — wrist TiledCamera <span class="tag tag--nvidia">NVIDIA</span> RGB frame
+          (resized to 320×320)</li>
+        <li><strong>External camera</strong> — top-down TiledCamera <span class="tag tag--nvidia">NVIDIA</span> RGB
+          frame (resized to 320×320)</li>
+        <li><strong>Timestamp</strong> — <code>time.time()</code> in seconds</li>
+      </ul>
+
+      <pre><code class="language-python"># From server_data_logger.py — logging block
+if step % 4 == 0:
+    ego_rgb = wrist_cam.data.output["rgb"][0].cpu().numpy()
+    ext_rgb = top_cam.data.output["rgb"][0].cpu().numpy()
+    joint_pos = robot.data.joint_pos[0].cpu().numpy()
+
+    obs_joints = np.concatenate([joint_pos[:6], [0.0]])  # 7-dim
+    action_joints = obs_joints.copy()
+
+    sim_logger.push(action_joints, obs_joints, {
+        "rgb_ego": ego_rgb,
+        "rgb_external": ext_rgb,
+    }, time.time())</code></pre>
+
+      <h2 id="logger-api">SimDataLogger API</h2>
+      <p>The <code>SimDataLogger</code> class in <code>sim_data_logger.py</code> handles background logging.</p>
+
+      <h3 id="logger-init">Initialization</h3>
+      <pre><code class="language-python">from sim_data_logger import SimDataLogger
+
+logger = SimDataLogger(
+    dataset_root="/path/to/output",
+    episode_num=0,
+    cameras={"ego": {"width": 640, "height": 480}, "external": {"width": 640, "height": 480}},
+    fps=30.0,
+    dataset_config_path="data_logger_config.yaml",
+)</code></pre>
+
+      <h3 id="logger-lifecycle">Lifecycle</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Method</th>
+            <th>Purpose</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>init_episode()</code></td>
+            <td>Create output directories, start background thread</td>
+          </tr>
+          <tr>
+            <td><code>push(action, obs, visual_obs, ts)</code></td>
+            <td>Enqueue one data frame (non-blocking)</td>
+          </tr>
+          <tr>
+            <td><code>finalize()</code></td>
+            <td>Stop thread, flush to Parquet, update meta/info.json</td>
+          </tr>
+          <tr>
+            <td><code>discard()</code></td>
+            <td>Abandon episode, delete written JPEGs</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3 id="logger-push"><code>push()</code> Parameters</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Shape</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>action_joints</code></td>
+            <td>np.ndarray</td>
+            <td>(7,)</td>
+            <td>Commanded joint targets</td>
+          </tr>
+          <tr>
+            <td><code>obs_joints</code></td>
+            <td>np.ndarray</td>
+            <td>(7,)</td>
+            <td>Observed joint positions</td>
+          </tr>
+          <tr>
+            <td><code>visual_obs</code></td>
+            <td>dict</td>
+            <td>—</td>
+            <td><code>{"rgb_ego": ..., "rgb_external": ...}</code></td>
+          </tr>
+          <tr>
+            <td><code>leader_ts</code></td>
+            <td>float</td>
+            <td>—</td>
+            <td>Timestamp in seconds</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2 id="dataset-schema">Dataset Schema</h2>
+      <pre><code class="language-text">dataset_root/
+├── meta/
+│   ├── info.json
+│   ├── tasks.parquet
+│   └── episodes/chunk-000/file-000.parquet
+├── data/chunk-000/file-000.parquet
+└── images/
+    ├── observation.images.ego/episode_000/*.jpg
+    └── observation.images.external/episode_000/*.jpg</code></pre>
+
+      <h3 id="parquet-columns">Parquet Columns</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Column</th>
+            <th>Type</th>
+            <th>Shape</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>frame_number</code></td>
+            <td>int</td>
+            <td>scalar</td>
+            <td>Sequential frame index</td>
+          </tr>
+          <tr>
+            <td><code>timestamp</code></td>
+            <td>float64</td>
+            <td>scalar</td>
+            <td>Wall clock (seconds)</td>
+          </tr>
+          <tr>
+            <td><code>state.joint_positions</code></td>
+            <td>float32</td>
+            <td>[7]</td>
+            <td>7 (arm+gripper)</td>
+          </tr>
+          <tr>
+            <td><code>action.robot</code></td>
+            <td>float32</td>
+            <td>[7]</td>
+            <td>Commanded joints</td>
+          </tr>
+          <tr>
+            <td><code>base.timestamp_us</code></td>
+            <td>int64</td>
+            <td>scalar</td>
+            <td>Microseconds</td>
+          </tr>
+          <tr>
+            <td><code>mode</code></td>
+            <td>string</td>
+            <td>—</td>
+            <td><code>"sim_teleop" or "hw_teleop"</code></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout--nvidia">
+        <div class="callout__title">🟢 GR00T Compatibility</div>
+        The schema matches the NVIDIA GR00T training toolkit format so sim and real datasets can be directly mixed for
+        co-training without conversion.
+      </div>
+
+      <h2 id="hw-collection">Hardware Data Collection <span class="tag tag--addverb">Addverb</span></h2>
+      <p>For real-world demonstrations, data is collected directly on the hardware using a logic flow that mirrors the
+        <code>SimDataLogger</code>:</p>
+      <ul>
+        <li><strong>TCP/IP Server</strong> — A proprietary stack runs on the robot which exposes a TCP/IP server.</li>
+        <li><strong>ROS2 Control</strong> — Connection via ROS2 to command joint positions using a teleop client.</li>
+        <li><strong>Unified Logging</strong> — Captures ego/external camera images along with robot state, actions, and
+          timestamps into the <strong>same Parquet + JPEG format</strong> used in simulation.</li>
+      </ul>
+      <p>This shared schema allows researchers to independently collect large-scale augmented simulation datasets and
+        smaller-scale real grounding datasets, then mix them for Strategy 2 co-training.</p>
+
+      <div class="img-grid">
+        <div class="img-item">
+          <div class="placeholder-img">📷 Photo: Hardware Setup - External View</div>
+          <div class="img-caption">Syncro5 Hardware (External View)</div>
+        </div>
+        <div class="img-item">
+          <div class="placeholder-img">📷 Photo: Hardware Setup - Ego View</div>
+          <div class="img-caption">Syncro5 Hardware (Ego View)</div>
+        </div>
+      </div>
+
+      <h2 id="multi-episode">Multi-Episode Strategies</h2>
+      <p>For GR00T training, you need <strong>50–200 demonstrations</strong>. Tips:</p>
+      <ul>
+        <li>Each run of <code>server_data_logger.py</code> creates a new dataset directory</li>
+        <li>Task prompts are configured in <code>data_logger_config.yaml → task_ranges</code></li>
+        <li>Use <code>discard()</code> to abandon bad episodes</li>
+        <li>Multiple directories can be merged by concatenating Parquet files</li>
+      </ul>
+
+      <div class="page-nav">
+        <a class="page-nav__link" href="api-reference.html">
+          <div class="page-nav__label">← Previous</div>
+          <div class="page-nav__title">API Reference</div>
+        </a>
+        <a class="page-nav__link page-nav__link--next" href="training.html">
+          <div class="page-nav__label">Next →</div>
+          <div class="page-nav__title">Training &amp; Evaluation</div>
+        </a>
+      </div>
+
+      <footer class="footer">
+        <p>Syncro5 Training Pipeline Docs · <a href="https://addverb.com" target="_blank">Addverb Technologies</a></p>
+      </footer>
+
+    </div>
+  </main>
+
+  <script src="js/main.js"></script>
+</body>
+
+</html>

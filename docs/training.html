@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Training &amp; Evaluation — Syncro5 Docs</title>
+  <meta name="description" content="NVIDIA GR00T N1.6 fine-tuning, sim and real evaluation, co-training strategies for the Addverb Syncro5 cobot.">
+  <link rel="stylesheet" href="css/styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+</head>
+<body>
+
+<nav class="navbar">
+  <button class="navbar__hamburger" aria-label="Toggle menu">☰</button>
+  <a class="navbar__brand" href="index.html">
+    <svg viewBox="0 0 120 28" fill="none"><rect x="0" y="4" width="20" height="20" rx="4" fill="#E3000F"/><path d="M6 18L10 10L14 18" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><text x="26" y="20" fill="#1a1a28" font-family="Inter,sans-serif" font-size="15" font-weight="700">addverb</text></svg>
+    <span>Syncro5 <span class="brand-accent">Docs</span></span>
+  </a>
+  <div class="navbar__spacer"></div>
+  <div class="navbar__links"><a href="https://addverb.com" target="_blank">Addverb.com</a> <a href="https://developer.nvidia.com/isaac" target="_blank">NVIDIA Isaac</a></div>
+</nav>
+
+<aside class="sidebar">
+  <div class="sidebar__section">
+    <div class="sidebar__title">Getting Started</div>
+    <a class="sidebar__link" href="index.html"><span class="icon"></span>Overview</a>
+  </div>
+  <div class="sidebar__section">
+    <div class="sidebar__title">Guide</div>
+    <a class="sidebar__link" href="architecture.html"><span class="icon"></span> Architecture &amp; Data Flow</a>
+    <a class="sidebar__link" href="api-reference.html"><span class="icon"></span> API Reference</a>
+    <a class="sidebar__link" href="data-collection.html"><span class="icon"></span> Data Collection</a>
+    <a class="sidebar__link active" href="training.html"><span class="icon"></span> Training &amp; Evaluation</a>
+  </div>
+</aside>
+
+<aside class="toc" id="toc"></aside>
+
+<main class="main">
+<div class="main__inner">
+
+  <h1>Training &amp; Evaluation</h1>
+  <p>End-to-end flow from collected datasets to a deployed autonomous policy: fine-tuning <strong>NVIDIA GR00T N1.6</strong>, evaluating in NVIDIA Isaac Lab, deploying to the Addverb Syncro5, and co-training.</p>
+
+  <h2 id="overview">Training Overview</h2>
+
+  <div class="mermaid">
+    flowchart TB
+      DS["Collected Dataset<br/>Parquet + JPEG<br/>50–200 episodes"] --> FT["GR00T N1.6<br/>Fine-tuning<br/>10,000 steps"]
+      FT --> CK["Checkpoint"]
+      CK --> SE["Sim Evaluation<br/>Isaac Lab<br/>≥30 rollouts"]
+      CK --> RE["Real Evaluation<br/>Syncro5 Arm<br/>Policy Server"]
+      RE -- "gap too large" --> CT["Co-Training<br/>Mix sim + real"]
+      CT --> FT
+      SE -- "pass" --> RE
+
+      classDef nvidia fill:#f0fae0,stroke:#76B900,color:#2a2a3a
+      classDef addverb fill:#fce8e9,stroke:#E3000F,color:#2a2a3a
+      classDef mixed fill:#f7f7fa,stroke:#d8d8e2,color:#2a2a3a
+      class FT,CK,SE nvidia
+      class RE addverb
+      class DS,CT mixed
+  </div>
+
+  <h2 id="prerequisites">Prerequisites</h2>
+  <table class="nvidia-table">
+    <thead><tr><th>Requirement</th><th>Minimum</th><th>Recommended</th></tr></thead>
+    <tbody>
+      <tr><td>GPU VRAM</td><td>24 GB (RTX 4090)</td><td>48 GB+ (A6000/H100)</td></tr>
+      <tr><td>Dataset size</td><td>50 episodes</td><td>100–200 episodes</td></tr>
+      <tr><td>GR00T base model</td><td colspan="2"><code>nvidia/GR00T-N1.6-3B</code></td></tr>
+      <tr><td>Framework</td><td colspan="2">PyTorch 2.x + NVIDIA GR00T training toolkit</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout callout--danger">
+    <div class="callout__title">⚠️ GPU Memory</div>
+    Training with batch size 32 requires at least 24 GB VRAM on NVIDIA GPUs. Reduce <code>global_batch_size</code> or use gradient accumulation for smaller GPUs.
+  </div>
+
+  <h2 id="fine-tuning">GR00T N1.6 Fine-Tuning <span class="tag tag--nvidia">NVIDIA GR00T</span></h2>
+
+  <div class="section-highlight">
+    <h4 style="color: var(--clr-nvidia-dark); margin-top: 0;">NVIDIA GR00T N1.6</h4>
+    <p style="margin-bottom: 0;">A 3-billion parameter <strong>Vision-Language-Action (VLA)</strong> foundation model from NVIDIA. Accepts dual-camera RGB + language task description, outputs 16-step action trajectories. Fine-tuned on Addverb's teleoperation datasets in ~2 hours on a single A6000.</p>
+  </div>
+
+  <h3 id="training-command">Training Command</h3>
+  <pre><code class="language-bash">python gr00t/experiment/launch_finetune.py \
+    --base_model_path nvidia/GR00T-N1.6-3B \
+    --dataset_path /path/to/syncro5_dataset \
+    --max_steps 10000 \
+    --learning_rate 1e-4 \
+    --global_batch_size 32 \
+    --action_horizon 16 \
+    --output_dir /path/to/checkpoints</code></pre>
+
+  <h3 id="key-hyperparams">Key Hyperparameters</h3>
+  <table class="nvidia-table">
+    <thead><tr><th>Parameter</th><th>Default</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td><code>--max_steps</code></td><td>10,000</td><td>More steps for larger datasets; diminishing returns past 20k</td></tr>
+      <tr><td><code>--learning_rate</code></td><td>1e-4</td><td>Standard for VLA fine-tuning</td></tr>
+      <tr><td><code>--global_batch_size</code></td><td>32</td><td>Reduce to 16 or 8 for smaller GPUs</td></tr>
+      <tr><td><code>--action_horizon</code></td><td>16</td><td>Future action steps predicted per inference</td></tr>
+      <tr><td><code>--warmup_steps</code></td><td>500</td><td>Linear warmup for learning rate</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="dataset-format">Dataset Format Requirements</h3>
+  <p>The NVIDIA GR00T training script expects the exact directory structure produced by <code>SimDataLogger</code>:</p>
+  <pre><code class="language-text">dataset/
+├── meta/
+│   ├── info.json
+│   ├── tasks.parquet
+│   └── episodes/chunk-000/file-000.parquet
+├── data/chunk-000/file-000.parquet
+└── images/
+    ├── observation.images.ego/episode_000/*.jpg
+    └── observation.images.external/episode_000/*.jpg</code></pre>
+
+  <div class="callout callout--tip">
+    <div class="callout__title">💡 Tip</div>
+    The <code>meta/info.json</code> must contain correct <code>total_episodes</code>, <code>total_frames</code>, camera names, and image shape. <code>SimDataLogger.finalize()</code> generates this automatically.
+  </div>
+
+  <h2 id="sim-eval">Sim Evaluation (Stage 3) <span class="tag tag--nvidia">Isaac Lab</span></h2>
+  <p>Evaluate the trained policy in the same NVIDIA Isaac Lab environment used for data collection.</p>
+
+  <h3 id="sim-eval-setup">Setup</h3>
+  <pre><code class="language-bash"># Start the GR00T policy server
+python run_gr00t_server.py \
+    --checkpoint /path/to/checkpoint \
+    --action_horizon 16
+
+# Run evaluation rollouts in Isaac Lab
+python lerobot_eval \
+    --env Syncro5-Teleop-Cam-v0-Eval \
+    --num_rollouts 30 \
+    --max_steps 300</code></pre>
+
+  <h3 id="sim-eval-criteria">Success Criteria</h3>
+  <ul>
+    <li>Run at least <strong>30 rollouts</strong> for statistical significance</li>
+    <li>Target success rate: <strong>50–70%</strong></li>
+    <li>If below 50%, collect more demonstrations or adjust hyperparameters</li>
+  </ul>
+
+  <h2 id="real-eval">Real Evaluation (Stage 4) <span class="tag tag--addverb">Addverb</span></h2>
+  <p>Deploy the GR00T policy server to control the physical Addverb Syncro5 arm.</p>
+
+  <h3 id="real-eval-flow">Deployment Flow</h3>
+  <div class="mermaid">
+    flowchart LR
+      PS["GR00T Policy Server<br/>(NVIDIA inference)"] -->|"action"| RC["Robot Client<br/>(ROS2 bridge)"]
+      RC -->|"velocity cmd"| ARM["Syncro5 Arm"]
+      ARM -->|"joint state"| RC
+      CAM1["Wrist Camera"] -->|"RGB"| RC
+      CAM2["Top Camera"] -->|"RGB"| RC
+      RC -->|"observation"| PS
+
+      classDef nvidia fill:#f0fae0,stroke:#76B900,color:#2a2a3a
+      classDef addverb fill:#fce8e9,stroke:#E3000F,color:#2a2a3a
+      class PS nvidia
+      class RC,ARM,CAM1,CAM2 addverb
+  </div>
+
+  <pre><code class="language-bash"># Terminal 1: Start NVIDIA GR00T policy server
+python run_gr00t_server.py --checkpoint /path/to/checkpoint
+
+# Terminal 2: Start Addverb robot client
+python keyboard_teleop_robot.py --autonomous</code></pre>
+
+  <h3 id="real-eval-tips">Tips for Real Evaluation</h3>
+  <ul>
+    <li>Ensure <strong>camera positions</strong> on the real Syncro5 match the Isaac Sim configuration</li>
+    <li>Verify <strong>joint calibration</strong> — small offsets cause large behavior differences</li>
+    <li>Start with <strong>slow velocities</strong> and increase gradually</li>
+    <li>Keep a hand on the <strong>e-stop</strong> during initial runs</li>
+  </ul>
+
+  <h2 id="co-training">Co-Training (Stage 5)</h2>
+  <p>If the sim-to-real gap is too large, co-training mixes a <strong>small number of real demonstrations</strong> with the NVIDIA Isaac Sim dataset.</p>
+
+  <h3 id="co-training-strategy">Strategy 2: Co-Training With Real Data</h3>
+  <p>Co-training addresses the sim-to-real gap by combining abundant simulation data with exact real-world demonstrations. Because the **same logger** is used for both hardware and simulation pipelines, the datasets share an identical Parquet + JPEG schema, allowing for seamless concatenation.</p>
+
+  <div class="nvidia-table-container">
+    <table class="nvidia-table">
+      <thead>
+        <tr>
+          <th>Data Source</th>
+          <th>Quantity</th>
+          <th>Reality Match</th>
+          <th>Role</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Simulation</strong></td>
+          <td>Abundant (70–100+ episodes)</td>
+          <td>Approximate</td>
+          <td>Broad task coverage & augmentation</td>
+        </tr>
+        <tr>
+          <td><strong>Real teleop</strong></td>
+          <td>Limited (5–20 episodes)</td>
+          <td>Exact</td>
+          <td>Reality grounding & gap closure</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout callout--nvidia">
+    <div class="callout__title">🟢 Co-Training Mix</div>
+    A powerful mix involves combining a small set of real Addverb demonstrations (grounding) with a large set of augmented NVIDIA Isaac Sim episodes. The simulation dataset provides the diversity needed for generalization, while the real data corrects for physics and visual discrepancies.
+  </div>
+
+  <h3 id="co-training-command">Co-Training Command</h3>
+  <pre><code class="language-bash">python gr00t/experiment/launch_finetune.py \
+    --base_model_path nvidia/GR00T-N1.6-3B \
+    --dataset_path /path/to/combined_dataset \
+    --max_steps 10000 \
+    --learning_rate 5e-5 \
+    --global_batch_size 32</code></pre>
+
+  <div class="callout callout--tip">
+    <div class="callout__title">💡 Tip</div>
+    Use a <strong>lower learning rate</strong> (5e-5) for co-training to avoid catastrophic forgetting of sim-learned behaviors.
+  </div>
+
+  <h2 id="conventions">Joint Conventions</h2>
+  <table>
+    <thead><tr><th>Index</th><th>Joint</th><th>Type</th><th>Unit</th></tr></thead>
+    <tbody>
+      <tr><td>0</td><td>joint1 (base rotation)</td><td>Revolute</td><td>radians</td></tr>
+      <tr><td>1</td><td>joint2 (shoulder)</td><td>Revolute</td><td>radians</td></tr>
+      <tr><td>2</td><td>joint3 (elbow)</td><td>Revolute</td><td>radians</td></tr>
+      <tr><td>3</td><td>joint4 (wrist pitch)</td><td>Revolute</td><td>radians</td></tr>
+      <tr><td>4</td><td>joint5 (wrist roll)</td><td>Revolute</td><td>radians</td></tr>
+      <tr><td>5</td><td>joint6 (flange)</td><td>Revolute</td><td>radians</td></tr>
+      <tr><td>6</td><td>gripper (finger_joint)</td><td>Revolute</td><td>radians</td></tr>
+    </tbody>
+  </table>
+  <p>Indices 7–8 are zero-padded for <code>base_obs_dim</code> / <code>base_act_dim</code> compatibility with the NVIDIA GR00T training format.</p>
+
+  <div class="page-nav">
+    <a class="page-nav__link" href="data-collection.html">
+      <div class="page-nav__label">← Previous</div>
+      <div class="page-nav__title">Data Collection</div>
+    </a>
+    <a class="page-nav__link page-nav__link--next" href="index.html">
+      <div class="page-nav__label">Back to →</div>
+      <div class="page-nav__title">Home</div>
+    </a>
+  </div>
+
+  <footer class="footer">
+    <p>Syncro5 Training Pipeline Docs · <a href="https://addverb.com" target="_blank">Addverb Technologies</a></p>
+  </footer>
+
+</div>
+</main>
+
+<script src="js/main.js"></script>
+</body>
+</html>

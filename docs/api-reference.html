@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>API Reference — Syncro5 Docs</title>
+  <meta name="description" content="WebSocket protocol, SyncroSimClient class API, CLI arguments, and configuration reference for the Syncro5 pipeline.">
+  <link rel="stylesheet" href="css/styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+</head>
+<body>
+
+<nav class="navbar">
+  <button class="navbar__hamburger" aria-label="Toggle menu">☰</button>
+  <a class="navbar__brand" href="index.html">
+    <svg viewBox="0 0 120 28" fill="none"><rect x="0" y="4" width="20" height="20" rx="4" fill="#E3000F"/><path d="M6 18L10 10L14 18" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><text x="26" y="20" fill="#1a1a28" font-family="Inter,sans-serif" font-size="15" font-weight="700">addverb</text></svg>
+    <span>Syncro5 <span class="brand-accent">Docs</span></span>
+  </a>
+  <div class="navbar__spacer"></div>
+  <div class="navbar__links">
+    <a href="https://addverb.com" target="_blank">Addverb.com</a>
+    <a href="https://developer.nvidia.com/isaac" target="_blank">NVIDIA Isaac</a>
+  </div>
+</nav>
+
+<aside class="sidebar">
+  <div class="sidebar__section">
+    <div class="sidebar__title">Getting Started</div>
+    <a class="sidebar__link" href="index.html"><span class="icon"></span>Overview</a>
+  </div>
+  <div class="sidebar__section">
+    <div class="sidebar__title">Guide</div>
+    <a class="sidebar__link" href="architecture.html"><span class="icon"></span> Architecture &amp; Data Flow</a>
+    <a class="sidebar__link active" href="api-reference.html"><span class="icon"></span> API Reference</a>
+    <a class="sidebar__link" href="data-collection.html"><span class="icon"></span> Data Collection</a>
+    <a class="sidebar__link" href="training.html"><span class="icon"></span> Training &amp; Evaluation</a>
+  </div>
+</aside>
+
+<aside class="toc" id="toc"></aside>
+
+<main class="main">
+<div class="main__inner">
+
+  <h1>API Reference</h1>
+  <p>Complete reference for the WebSocket protocol, Python client library, CLI arguments, and configuration files.</p>
+
+  <h2 id="websocket-protocol">WebSocket Protocol</h2>
+  <p>The NVIDIA Isaac Sim server exposes a WebSocket API on port <strong>8765</strong>. All messages are JSON-encoded UTF-8 text frames.</p>
+
+  <h3 id="cmd-set-joints"><code>set_joints</code></h3>
+  <p>Set target joint positions (radians). Only listed joints are updated.</p>
+  <pre><code class="language-json">// → Client sends:
+{
+  "cmd": "set_joints",
+  "positions": {
+    "joint1": 0.0, "joint2": -0.785, "joint3": 1.571,
+    "joint4": 0.0, "joint5": 0.0, "joint6": 0.0
+  }
+}
+// ← No response (fire-and-forget)</code></pre>
+
+  <div class="callout callout--info">
+    <div class="callout__title">ℹ️ Note</div>
+    The command queue has maxsize 1. Stale commands are dropped so PhysX always applies the <strong>latest</strong> target.
+  </div>
+
+  <h3 id="cmd-get-state"><code>get_state</code></h3>
+  <p>Query current joint positions and velocities from Isaac Sim.</p>
+  <pre><code class="language-json">// → {"cmd": "get_state"}
+// ← {"joint_positions": {...}, "joint_velocities": {...}}</code></pre>
+
+  <h3 id="cmd-set-gripper"><code>set_gripper_state</code></h3>
+  <p>Set gripper to <code>"open"</code> or <code>"closed"</code>. Applies mimic multipliers automatically via PhysX.</p>
+  <pre><code class="language-json">{"cmd": "set_gripper_state", "gripper_state": "open"}
+{"cmd": "set_gripper_state", "gripper_state": "closed"}</code></pre>
+
+  <table>
+    <thead><tr><th>State</th><th><code>finger_joint</code></th><th>Outer knuckles</th><th>Inner fingers</th></tr></thead>
+    <tbody>
+      <tr><td><code>open</code></td><td>0.0 rad</td><td>0.0 rad</td><td>0.0 rad</td></tr>
+      <tr><td><code>closed</code></td><td>0.8 rad</td><td>0.8 rad</td><td>−0.8 rad</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="cmd-get-gripper"><code>get_gripper_state</code></h3>
+  <pre><code class="language-json">// → {"cmd": "get_gripper_state"}
+// ← {"gripper_state": "open"}</code></pre>
+
+  <h2 id="client-library">SyncroSimClient (Python)</h2>
+  <p>Thread-safe Python client in <code>syncro_sim_client.py</code>. Raw socket WebSocket, no external deps.</p>
+
+  <h3 id="constructor">Constructor</h3>
+  <pre><code class="language-python">client = SyncroSimClient(robot="syncro5", host="localhost", port=8765)</code></pre>
+
+  <h3 id="connect-disconnect"><code>connect()</code> / <code>disconnect()</code></h3>
+  <pre><code class="language-python">client.connect(timeout=10.0)
+client.disconnect()
+# Or context manager:
+with SyncroSimClient(robot="syncro5") as client:
+    state = client.get_state()</code></pre>
+
+  <h3 id="set-joint-positions"><code>set_joint_positions(positions)</code></h3>
+  <pre><code class="language-python">client.set_joint_positions({"joint1": 0.0, "joint2": -0.785})</code></pre>
+
+  <h3 id="set-joint-degrees"><code>set_joint_positions_degrees(positions_deg)</code></h3>
+  <pre><code class="language-python">client.set_joint_positions_degrees({"joint2": -45.0, "joint3": 90.0})</code></pre>
+
+  <h3 id="set-all-joints"><code>set_all_joints(values, degrees=False)</code></h3>
+  <pre><code class="language-python">client.set_all_joints([0.0, -0.785, 1.571, 0.0, 0.0, 0.0])
+client.set_all_joints([0, -45, 90, 0, 0, 0], degrees=True)</code></pre>
+
+  <h3 id="get-state-api"><code>get_state()</code></h3>
+  <pre><code class="language-python">state = client.get_state()
+print(state["joint_positions"])
+print(state["joint_velocities"])</code></pre>
+
+  <h3 id="mirror-robot"><code>mirror_real_robot(obs, degrees=True)</code></h3>
+  <p>Translate Addverb real-robot observation (LeRobot format) to Isaac Sim joint targets.</p>
+  <pre><code class="language-python">client.mirror_real_robot({
+    "shoulder_pan.pos": -6.36, "shoulder_lift.pos": -51.95,
+    "elbow_flex.pos": 16.73, "wrist_flex.pos": 89.25,
+    "wrist_roll.pos": -51.85, "gripper.pos": 0.0,
+})</code></pre>
+
+  <div class="callout callout--tip">
+    <div class="callout__title">💡 Tip</div>
+    Real → sim mapping: shoulder_pan → joint1, shoulder_lift → joint2, etc. Unknown keys ignored.
+  </div>
+
+  <h2 id="cli-args">CLI Arguments <span class="tag tag--nvidia">Isaac Lab</span></h2>
+  <table>
+    <thead><tr><th>Argument</th><th>Default</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><code>--robot</code></td><td><code>syncro5</code></td><td>Robot model</td></tr>
+      <tr><td><code>--host</code></td><td><code>0.0.0.0</code></td><td>WebSocket bind host</td></tr>
+      <tr><td><code>--port</code></td><td><code>8765</code></td><td>WebSocket port</td></tr>
+      <tr><td><code>--enable_cameras</code></td><td><code>True</code></td><td>Enable NVIDIA TiledCamera rendering</td></tr>
+    </tbody>
+  </table>
+  <p>Plus all <a href="https://isaac-sim.github.io/IsaacLab">NVIDIA Isaac Lab AppLauncher</a> arguments (<code>--headless</code>, <code>--device</code>, etc.).</p>
+
+  <h2 id="config-ref">Configuration Reference</h2>
+  <h3 id="config-dataset">Dataset Section</h3>
+  <pre><code class="language-yaml">dataset:
+  name: "syncro5_dataset"
+  root: "/vla_dataset"
+  codebase_version: "v3.0"
+  robot_type: "syncro5"</code></pre>
+
+  <h3 id="config-dof">DOF Section</h3>
+  <pre><code class="language-yaml">dof:
+  joints_per_arm: 6
+  gripper_dim: 1
+  arm_joint_dim: 7
+  joint_dim: 9
+  action_dim: 9
+  base_obs_dim: 0
+  base_act_dim: 0</code></pre>
+
+  <h3 id="config-images">Images Section</h3>
+  <pre><code class="language-yaml">images:
+  log_width: 320
+  log_height: 320
+  jpeg_quality: 95
+  cameras:
+    - "ego"        # Wrist (NVIDIA TiledCamera)
+    - "external"   # Top-down (NVIDIA TiledCamera)</code></pre>
+
+  <h3 id="config-logging">Logging Section</h3>
+  <pre><code class="language-yaml">logging:
+  rate_hz: 30.0
+  debug_freq_hz: 1.0
+  max_queue_depth: 500</code></pre>
+
+  <div class="page-nav">
+    <a class="page-nav__link" href="architecture.html">
+      <div class="page-nav__label">← Previous</div>
+      <div class="page-nav__title">Architecture &amp; Data Flow</div>
+    </a>
+    <a class="page-nav__link page-nav__link--next" href="data-collection.html">
+      <div class="page-nav__label">Next →</div>
+      <div class="page-nav__title">Data Collection</div>
+    </a>
+  </div>
+
+  <footer class="footer">
+    <p>Syncro5 Training Pipeline Docs · <a href="https://addverb.com" target="_blank">Addverb Technologies</a></p>
+  </footer>
+
+</div>
+</main>
+
+<script src="js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Architecture &amp; Data Flow — Syncro5 Docs</title>
+  <meta name="description"
+    content="System architecture for the Syncro5 sim-to-real training pipeline. Isaac Sim server, WebSocket bridge, client architecture, and data flow.">
+  <link rel="stylesheet" href="css/styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+</head>
+
+<body>
+
+  <nav class="navbar">
+    <button class="navbar__hamburger" aria-label="Toggle menu">☰</button>
+    <a class="navbar__brand" href="index.html">
+      <svg viewBox="0 0 120 28" fill="none">
+        <rect x="0" y="4" width="20" height="20" rx="4" fill="#E3000F" />
+        <path d="M6 18L10 10L14 18" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+        <text x="26" y="20" fill="#1a1a28" font-family="Inter,sans-serif" font-size="15"
+          font-weight="700">addverb</text>
+      </svg>
+      <span>Syncro5 <span class="brand-accent">Docs</span></span>
+    </a>
+    <div class="navbar__spacer"></div>
+    <div class="navbar__links">
+      <a href="https://addverb.com" target="_blank">Addverb.com</a>
+      <a href="https://developer.nvidia.com/isaac" target="_blank">NVIDIA Isaac</a>
+    </div>
+  </nav>
+
+  <aside class="sidebar">
+    <div class="sidebar__section">
+      <div class="sidebar__title">Getting Started</div>
+      <a class="sidebar__link" href="index.html"><span class="icon"></span>Overview</a>
+    </div>
+    <div class="sidebar__section">
+      <div class="sidebar__title">Guide</div>
+      <a class="sidebar__link active" href="architecture.html"><span class="icon"></span> Architecture &amp; Data
+        Flow</a>
+      <a class="sidebar__link" href="api-reference.html"><span class="icon"></span> API Reference</a>
+      <a class="sidebar__link" href="data-collection.html"><span class="icon"></span> Data Collection</a>
+      <a class="sidebar__link" href="training.html"><span class="icon"></span> Training &amp; Evaluation</a>
+    </div>
+  </aside>
+
+  <aside class="toc" id="toc"></aside>
+
+  <main class="main">
+    <div class="main__inner">
+
+      <h1>Architecture &amp; Data Flow</h1>
+      <p>This page describes the overall system architecture, how data flows between components during teleoperation and
+        data collection, and the role of each key file in the codebase.</p>
+
+      <h2 id="system-overview">System Overview</h2>
+      <p>The Syncro5 training pipeline collects datasets across two main environments: <strong>Simulation</strong> and
+        <strong>Hardware</strong>. Both environments use the **same unified logger** (<code>SimDataLogger</code>) to
+        ensure identical data formats including robot state, commanded
+        actions, timestamps, and images from ego and external cameras.
+      </p>
+      <p>This architectural choice enables <strong>Strategy 2: Co-training</strong>, where a large, augmented simulation
+        dataset is mixed with real-world grounding demonstrations to bridge the sim-to-real gap.</p>
+
+      <div class="mermaid">
+        flowchart TB
+        subgraph SIM["Simulation Data Collection"]
+        SC["Teleop Client<br />(syncro_sim_client.py)"]
+        SS["Isaac Sim Server<br />(syncro_sim_server.py)"]
+        CAM_SIM["Dual Cameras<br />(Ego & External)"]
+        end
+
+        subgraph HW["Hardware Data Collection"]
+        HC["Teleop Client<br />(Keyboard Commands)"]
+        ROS["ROS2 Bridge"]
+        TCP["TCP/IP Server<br />(Proprietary Stack)"]
+        ARM["Syncro5 Robot"]
+        CAM_HW["Dual Cameras<br />(Ego & External)"]
+        end
+
+        subgraph DATA["Data Logging"]
+        LOG["Dataset (Parquet + JPEG)<br />- State<br />- Action<br />- Timestamp<br />- Images"]
+        end
+
+        SC -->|"Joint & Gripper Commands"| SS
+        SS --> CAM_SIM
+        SS --> LOG
+        CAM_SIM --> LOG
+
+        HC -->|"Joint Positions"| ROS
+        ROS -->|"TCP/IP"| TCP
+        TCP --> ARM
+        ARM --> LOG
+        CAM_HW --> LOG
+
+        classDef nvidia fill:#f0fae0,stroke:#76B900,color:#2a2a3a
+        classDef addverb fill:#fce8e9,stroke:#E3000F,color:#2a2a3a
+        class SIM nvidia
+        class HW addverb
+      </div>
+
+      <h2 id="sim-server">Simulation Server</h2>
+      <p>The sim server is the heart of the pipeline, built using NVIDIA Isaac Sim and Isaac Lab. It manages the PhysX
+        physics loop, camera rendering, and the WebSocket API.</p>
+
+      <table class="nvidia-table">
+        <thead>
+          <tr>
+            <th>File</th>
+            <th>Purpose</th>
+            <th>Key Features</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>syncro_sim.py</code></td>
+            <td>Basic 6-joint sim server</td>
+            <td>Ground + table + cubes scene, dual cameras, WebSocket API</td>
+          </tr>
+          <tr>
+            <td><code>syncro_sim_gripper_revolute.py</code></td>
+            <td>Full sim with gripper joints</td>
+            <td>7 joints (6 arm + 1 gripper), mimic constraints, collision</td>
+          </tr>
+          <tr>
+            <td><code>server_data_logger.py</code></td>
+            <td>Sim + data logging</td>
+            <td>Everything above + SimDataLogger at 30 Hz, Parquet output</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3 id="sim-loop">Physics Loop</h3>
+      <p>The server runs a tight loop at <strong>120 Hz</strong> (physics dt = 1/120s, render interval = 2):</p>
+
+      <pre><code class="language-python">step = 0
+while simulation_app.is_running():
+    # 1. Read latest WebSocket command
+    cmd = _cmd_queue.get_nowait()
+    _apply_joint_command(target_pos, cmd, joint_idx)
+
+    # 2. Push target positions to PhysX
+    robot.set_joint_position_target(target_pos)
+    scene.write_data_to_sim()
+
+    # 3. Step physics &amp; update scene
+    sim.step()
+    scene.update(sim.get_physics_dt())
+
+    # 4. Publish state to WebSocket clients (every 5 steps)
+    if step % 5 == 0:
+        _update_shared_state(robot, joint_idx)
+
+    step += 1</code></pre>
+
+      <h3 id="websocket-bridge">WebSocket Bridge</h3>
+      <p>The WebSocket server runs in a <strong>daemon thread</strong> alongside the physics loop. It uses a
+        <strong>thread-safe queue</strong> (<code>_cmd_queue</code>) to pass commands from the async WebSocket handler
+        to the synchronous physics loop.
+      </p>
+
+      <div class="mermaid">
+        sequenceDiagram
+        participant C as Client
+        participant WS as WebSocket Thread
+        participant Q as Command Queue
+        participant SIM as Physics Loop
+
+        C->>WS: {"cmd": "set_joints", "positions": {...}}
+        WS->>Q: put(positions)
+        SIM->>Q: get_nowait()
+        SIM->>SIM: apply_joint_command()
+        SIM->>SIM: sim.step()
+
+        C->>WS: {"cmd": "get_state"}
+        WS-->>C: {"joint_positions": {...}, "joint_velocities": {...}}
+      </div>
+
+      <h3 id="gripper-mimic">Gripper Joints</h3>
+      <p>The custom two-finger gripper opens and closes based on the teleop commands</p>
+
+      <div class="callout callout--info">
+        <div class="callout__title">ℹ️ Note</div>
+        The <code>set_gripper_state</code> command automatically applies these commands.
+      </div>
+
+      <h2 id="scene-config">Scene Configuration</h2>
+      <p>The simulation scene is defined using Isaac Lab's <code>InteractiveSceneCfg</code> configclass. It includes:
+      </p>
+      <ul>
+        <li><strong>Ground plane</strong> with dome lighting (3000 lux)</li>
+        <li><strong>Table</strong> — 2.4 × 1.6 × 0.8m brown cuboid with collision</li>
+        <li><strong>Cubes</strong> — red and green 0.06m cubes with rigid body physics (0.1 kg)</li>
+        <li><strong>Robot</strong> — Syncro5 USD with custom two-finger gripper, mounted on the table surface</li>
+        <li><strong>Wrist camera</strong> — TiledCamera on end-effector (640×480, 30 FPS)</li>
+        <li><strong>Top-down camera</strong> — TiledCamera fixed overhead (640×480, 30 FPS)</li>
+      </ul>
+
+      <div class="img-grid">
+        <div class="img-item">
+          <img src="images/external_view.png" alt="Isaac Sim View">
+          <div class="img-caption">Top-down View (External Camera)</div>
+        </div>
+
+        <div class="img-item">
+          <img src="images/ego_view.png" alt="Isaac Sim View">
+          <div class="img-caption">Wrist View (Ego Camera)</div>
+        </div>
+      </div>
+
+      <h2 id="cameras">Camera Configuration</h2>
+      <table class="nvidia-table">
+        <thead>
+          <tr>
+            <th>Camera</th>
+            <th>Mount</th>
+            <th>Resolution</th>
+            <th>FPS</th>
+            <th>FOV</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Wrist (ego)</td>
+            <td>End-effector link</td>
+            <td>640 × 480</td>
+            <td>30</td>
+            <td>~87° HFOV</td>
+          </tr>
+          <tr>
+            <td>Top-down (external)</td>
+            <td>Fixed at 2.5m height</td>
+            <td>640 × 480</td>
+            <td>30</td>
+            <td>Wide overview</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>Both cameras use <code>TiledCameraCfg</code> with RGB and depth data types.</p>
+
+      <h2 id="client-arch">Client Architecture</h2>
+      <p>Three types of clients connect to the sim server:</p>
+
+      <h3 id="keyboard-teleop">Keyboard Teleop Client</h3>
+      <p><code>client_with_gripper.py</code> uses a background thread for non-blocking keyboard input and an async
+        WebSocket loop at ~100 Hz:</p>
+      <pre><code class="language-python"># Main loop at 100 Hz
+while True:
+    state = await ws.recv()
+    ch = consume_key_press()
+    if ch in 'qwerty':
+        # Increment corresponding joint by 0.03 rad
+    elif ch == 'u':
+        # Open gripper
+    elif ch == 'j':
+        # Close gripper
+    await asyncio.sleep(0.01)</code></pre>
+
+      <h3 id="python-client">Python Client Library</h3>
+      <p><code>syncro_sim_client.py</code> provides <code>SyncroSimClient</code>, a thread-safe class with raw socket
+        WebSocket implementation. See <a href="api-reference.html">API Reference</a> for details.</p>
+
+      <h3 id="ros2-bridge">ROS2 Bridge</h3>
+      <p>For hardware deployment, the teleop client simultaneously sends commands to both the sim (WebSocket) and the
+        real arm (ROS2 velocity topics). This enables real-time digital twinning and synchronized data collection.</p>
+
+      <h2 id="hardware">Hardware Data Collection</h2>
+      <p>The <code>hw_data_logger.py</code> module captures real-world demonstrations using:</p>
+      <ul>
+        <li><strong>Dual USB cameras</strong> (ego wrist + external top-down)</li>
+        <li><strong>ROS2 joint state</strong> subscriber for current arm positions</li>
+        <li>Same <strong>Parquet + JPEG</strong> format as sim, enabling dataset mixing for co-training</li>
+      </ul>
+
+      <video controls width="400">
+        <!-- <source src="https://www.w3schools.com/html/mov_bbb.mp4" type="video/mp4"> -->
+        <source src="./../docs/images/PXL_20260506_055417111.mp4" type="video/mp4">
+
+      </video>
+
+      <h2 id="file-map">Project File Map</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>File</th>
+            <th>Role</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>syncro_sim.py</code></td>
+            <td>Basic Isaac Sim server (6 joints, no gripper)</td>
+          </tr>
+          <tr>
+            <td><code>syncro_sim_gripper_revolute.py</code></td>
+            <td>Full sim server with 12 gripper joints</td>
+          </tr>
+          <tr>
+            <td><code>server_data_logger.py</code></td>
+            <td>Sim server + integrated 30 Hz data logging</td>
+          </tr>
+          <tr>
+            <td><code>syncro_sim_client.py</code></td>
+            <td>Python client library (SyncroSimClient class)</td>
+          </tr>
+          <tr>
+            <td><code>client_with_gripper.py</code></td>
+            <td>Keyboard teleop client with gripper controls</td>
+          </tr>
+          <tr>
+            <td><code>sim_data_logger.py</code></td>
+            <td>Background logging thread (Parquet + JPEG writer)</td>
+          </tr>
+          <tr>
+            <td><code>hw_data_logger.py</code></td>
+            <td>Hardware data logger (ROS2 + dual cameras)</td>
+          </tr>
+          <tr>
+            <td><code>data_logger_config.yaml</code></td>
+            <td>Dataset schema, image settings, DOF config</td>
+          </tr>
+
+        </tbody>
+      </table>
+
+      <div class="page-nav">
+        <a class="page-nav__link" href="index.html">
+          <div class="page-nav__label">← Previous</div>
+          <div class="page-nav__title">Home</div>
+        </a>
+        <a class="page-nav__link page-nav__link--next" href="api-reference.html">
+          <div class="page-nav__label">Next →</div>
+          <div class="page-nav__title">API Reference</div>
+        </a>
+      </div>
+
+      <footer class="footer">
+        <p>Syncro5 Training Pipeline Docs · <a href="https://addverb.com" target="_blank">Addverb Technologies</a></p>
+      </footer>
+
+    </div>
+  </main>
+
+  <script src="js/main.js"></script>
+</body>
+
+</html>

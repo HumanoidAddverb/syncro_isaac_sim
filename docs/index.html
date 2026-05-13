@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Syncro5 Training Pipeline — Addverb Robotics</title>
+  <meta name="description"
+    content="End-to-end sim-to-real training pipeline for the Syncro5 cobot, powered by NVIDIA Isaac Sim, Isaac Lab, and GR00T.">
+  <!-- <meta http-equiv="Content-Security-Policy" content="media-src 'self' file:;"> -->
+  <!-- Local videoCSP policy -->
+  <!-- <meta http-equiv="Content-Security-Policy"
+    content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; media-src 'self' file://{{ root }}/docs/images; frame-src 'self';"> -->
+
+  <link rel="stylesheet" href="css/styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+</head>
+
+<body>
+
+  <nav class="navbar" id="navbar">
+    <button class="navbar__hamburger" aria-label="Toggle menu">☰</button>
+    <a class="navbar__brand" href="index.html">
+      <svg viewBox="0 0 120 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <rect x="0" y="4" width="20" height="20" rx="4" fill="#E3000F" />
+        <path d="M6 18L10 10L14 18" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+        <text x="26" y="20" fill="#1a1a28" font-family="Inter,sans-serif" font-size="15"
+          font-weight="700">addverb</text>
+      </svg>
+      <span>Syncro5 <span class="brand-accent">Docs</span></span>
+    </a>
+    <div class="navbar__spacer"></div>
+    <div class="navbar__links">
+      <a href="https://addverb.com" target="_blank">Addverb.com</a>
+      <a href="https://developer.nvidia.com/isaac" target="_blank">NVIDIA Isaac</a>
+    </div>
+  </nav>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar__section">
+      <div class="sidebar__title">Getting Started</div>
+      <a class="sidebar__link active" href="index.html"><span class="icon"></span>Overview</a>
+    </div>
+    <div class="sidebar__section">
+      <div class="sidebar__title">Guide</div>
+      <a class="sidebar__link" href="architecture.html"><span class="icon"></span> Architecture &amp; Data Flow</a>
+      <a class="sidebar__link" href="api-reference.html"><span class="icon"></span> API Reference</a>
+      <a class="sidebar__link" href="data-collection.html"><span class="icon"></span> Data Collection</a>
+      <a class="sidebar__link" href="training.html"><span class="icon"></span> Training &amp; Evaluation</a>
+    </div>
+  </aside>
+
+  <aside class="toc" id="toc"></aside>
+
+  <main class="main">
+    <div class="main__inner">
+
+      <!-- Hero -->
+      <section class="hero">
+        <h1>Syncro5 <span class="accent">Sim-to-Real</span> Training Pipeline</h1>
+        <p class="hero__sub">
+          The complete operator's guide for training the Syncro5 cobot — capture VLA datasets in Isaac Sim, fine-tune
+          GR00T models, evaluate policies, and deploy to hardware.
+        </p>
+        <a class="hero__btn" href="architecture.html">Get Started →</a>
+      </section>
+
+      <!-- Pipeline Overview -->
+      <h2 id="pipeline">The Five-Stage Pipeline</h2>
+
+      <div class="pipeline">
+        <div class="pipeline__step">
+          <div class="pipeline__num">Stage 1</div>
+          <div class="pipeline__name">Data Capture</div>
+          <div class="pipeline__desc">Log joint states, actions, and dual-camera images via Isaac Sim and physical
+            hardware (TCP/IP stack) → Parquet + JPEG</div>
+        </div>
+        <div class="pipeline__step">
+          <div class="pipeline__num">Stage 2</div>
+          <div class="pipeline__name">Train</div>
+          <div class="pipeline__desc">GR00T N1.6 fine-tune, 50–200 demos, 10k steps</div>
+        </div>
+        <div class="pipeline__step">
+          <div class="pipeline__num">Stage 3</div>
+          <div class="pipeline__name">Eval (Sim)</div>
+          <div class="pipeline__desc">Same Isaac Lab env + DR, ≥50–70% over ≥30 rollouts</div>
+        </div>
+        <div class="pipeline__step">
+          <div class="pipeline__num">Stage 4</div>
+          <div class="pipeline__name">Eval (Real)</div>
+          <div class="pipeline__desc">Policy server + physical Syncro5 arm</div>
+        </div>
+        <div class="pipeline__step">
+          <div class="pipeline__num">Stage 5</div>
+          <div class="pipeline__name">Co-Train</div>
+          <div class="pipeline__desc">Mix real grounded demonstrations with large-scale augmented simulation data to
+            bridge the gap</div>
+        </div>
+      </div>
+
+      <div class="mermaid">
+        flowchart LR
+        S1["<b>1. DATA CAPTURE</b><br />Sim & Hardware<br />Teleop + Cameras"]
+        S2["<b>2. TRAIN</b><br />GR00T N1.6<br />fine-tune"]
+        S3["<b>3. EVAL (sim)</b><br />Isaac Lab<br />rollouts"]
+        S4["<b>4. EVAL (real)</b><br />Syncro5 arm<br />deployment"]
+        S5["<b>5. CO-TRAIN</b><br />Sim + Real<br />dataset mix"]
+        S1 --> S2 --> S3 --> S4
+        S4 -- "gap too large" --> S5
+        S5 -- "retrain" --> S2
+        classDef nvidia fill:#f0fae0,stroke:#76B900,color:#2a2a3a
+        classDef addverb fill:#fce8e9,stroke:#E3000F,color:#2a2a3a
+        classDef mixed fill:#f7f7fa,stroke:#d8d8e2,color:#2a2a3a
+        class S1,S3 nvidia
+        class S2 nvidia
+        class S4 addverb
+        class S5 mixed
+      </div>
+
+      <!-- NVIDIA Toolkit -->
+      <h2 id="nvidia-tools">Technology Stack</h2>
+      <p>The pipeline leverages the NVIDIA robotics ecosystem across every stage — from physics simulation to
+        vision-language-action model deployment.</p>
+
+      <div class="nvidia-stack">
+        <div class="nvidia-stack__item">
+          <div class="nvidia-stack__name">Isaac Sim</div>
+          <div class="nvidia-stack__desc">High-fidelity PhysX simulation for the Syncro5 digital twin. GPU-accelerated
+            rendering with domain randomization at 120 Hz.</div>
+        </div>
+        <div class="nvidia-stack__item">
+          <div class="nvidia-stack__name">Isaac Lab</div>
+          <div class="nvidia-stack__desc">Python-first robot learning framework. Configclasses for scene setup,
+            articulated robots, tiled cameras, and RL/IL environments.</div>
+        </div>
+        <div class="nvidia-stack__item">
+          <div class="nvidia-stack__name">GR00T N1.6</div>
+          <div class="nvidia-stack__desc">3B-parameter vision-language-action foundation model. Fine-tuned on 50–200
+            teleoperation demos for autonomous manipulation.</div>
+        </div>
+        <div class="nvidia-stack__item">
+          <div class="nvidia-stack__name">PhysX 5</div>
+          <div class="nvidia-stack__desc">Real-time rigid body and articulation dynamics. Handles gripper contacts,
+            mimic joints, and collision at simulation-grade fidelity.</div>
+        </div>
+        <div class="nvidia-stack__item">
+          <div class="nvidia-stack__name">USD / OpenUSD</div>
+          <div class="nvidia-stack__desc">Universal Scene Description format for robot assets, materials, and scene
+            composition.</div>
+        </div>
+        <div class="nvidia-stack__item">
+          <div class="nvidia-stack__name">TiledCamera</div>
+          <div class="nvidia-stack__desc">GPU-accelerated camera rendering for wrist and top-down viewpoints. RGB +
+            depth at 640×480 @ 30 FPS.</div>
+        </div>
+      </div>
+
+      <!-- What You'll Learn -->
+      <h2 id="objectives">What You'll Learn</h2>
+      <ul>
+        <li>Set up the Isaac Sim digital twin via <code>syncro_sim_server.py</code> with two cameras mimicking the real
+          world setup.</li>
+        <li>Control the robot and gripper in sim using keyboard teleop via <code>syncro_sim_client.py</code>.</li>
+        <li>Connect to the hardware's proprietary TCP/IP stack via ROS2 to command joint positions.</li>
+        <li>Log synchronized robot state, actions, timestamps, and ego/external camera images for both routes.</li>
+        <li>Collect datasets in the Parquet + JPEG format compatible with GR00T.</li>
+        <li>Fine-tune GR00T N1.6 vision-language-action models for manipulation tasks.</li>
+      </ul>
+
+      <!-- Quick Start -->
+      <h2 id="quickstart">Quick Start</h2>
+
+      <h3 id="launch-sim">1. Launch the Simulation Server</h3>
+      <pre><code class="language-bash"># Syncro5 with gripper + data logging
+python server_data_logger.py --robot syncro5
+
+# Basic simulation (no logging)
+python syncro_sim_gripper_revolute.py --robot syncro5
+
+# Custom host and port
+python server_data_logger.py --host 0.0.0.0 --port 8765</code></pre>
+
+      <h3 id="connect-client">2. Connect a Teleop Client</h3>
+      <pre><code class="language-bash">python client_with_gripper.py</code></pre>
+
+      <div class="callout callout--tip">
+        <div class="callout__title">💡 Tip</div>
+        Keys <code>q w e r t y</code> increment joints 1–6; <code>a s d f g h</code> decrement them.
+        Press <code>u</code> to open the gripper, <code>j</code> to close it.
+      </div>
+
+      <h3 id="use-client-lib">3. Use the Python Client Library</h3>
+      <pre><code class="language-python">from syncro_sim_client import SyncroSimClient
+
+with SyncroSimClient(robot="syncro5") as client:
+    client.set_joint_positions({
+        "joint1": 0.0,
+        "joint2": -0.785,
+        "joint3":  1.571,
+    })
+    state = client.get_state()
+    print(state["joint_positions"])</code></pre>
+
+      <!-- Navigation Cards -->
+      <h2 id="explore">Explore the Documentation</h2>
+
+      <div class="cards">
+        <a class="card" href="architecture.html">
+          <div class="card__icon"></div>
+          <div class="card__title">Architecture &amp; Data Flow</div>
+          <div class="card__desc">System overview, Isaac Sim server, WebSocket bridge, client architecture, and hardware
+            integration.</div>
+        </a>
+        <a class="card" href="api-reference.html">
+          <div class="card__icon"></div>
+          <div class="card__title">API Reference</div>
+          <div class="card__desc">WebSocket protocol, SyncroSimClient class, CLI arguments, and configuration schema.
+          </div>
+        </a>
+        <a class="card" href="data-collection.html">
+          <div class="card__icon"></div>
+          <div class="card__title">Data Collection</div>
+          <div class="card__desc">Sim and hardware data capture, dataset schema, SimDataLogger API, multi-episode
+            strategies.</div>
+        </a>
+        <a class="card card--nvidia" href="training.html">
+          <div class="card__icon"></div>
+          <div class="card__title">Training &amp; Evaluation</div>
+          <div class="card__desc">GR00T N1.6 fine-tuning, sim/real evaluation, co-training, and deployment.</div>
+        </a>
+      </div>
+
+      <!-- Conventions -->
+      <h2 id="conventions">Conventions</h2>
+      <ul>
+        <li><strong>Joint vector</strong> is always <code>[joint1..joint6]</code> (6 arm joints, radians) + optional
+          gripper joints for the Robotiq 2F-85</li>
+        <li><strong>Dataset format</strong> is identical between sim and real captures (Parquet + per-episode JPEGs),
+          enabling co-training</li>
+        <li><strong>WebSocket protocol</strong> runs on port <code>8765</code> by default with JSON messages</li>
+      </ul>
+
+      <footer class="footer">
+        <p>Syncro5 Training Pipeline Docs · <a href="https://addverb.com" target="_blank">Addverb Technologies</a></p>
+      </footer>
+
+    </div>
+  </main>
+
+  <script src="js/main.js"></script>
+</body>
+
+</html>
