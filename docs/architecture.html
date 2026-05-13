@@ -200,13 +200,29 @@ while simulation_app.is_running():
 
       <div class="img-grid">
         <div class="img-item">
-          <img src="images/external_view.png" alt="Isaac Sim View">
-          <div class="img-caption">Top-down View (External Camera)</div>
+          <img src="images/table_3_views.png" alt="Isaac Sim View">
+          <div class="img-caption">External Camera View (top right), Ego Camera (bottom right)</div>
         </div>
 
         <div class="img-item">
-          <img src="images/ego_view.png" alt="Isaac Sim View">
-          <div class="img-caption">Wrist View (Ego Camera)</div>
+          <img src="images/table_front_view.png" alt="Isaac Sim View">
+          <div class="img-caption">Front View for the simulation setup</div>
+        </div>
+      </div>
+      <div class="img-grid">
+        <div class="img-item">
+          <img src="images/pick_sim.png" alt="Isaac Sim View">
+          <div class="img-caption">cobot reaching the target pick positions</div>
+        </div>
+
+        <div class="img-item">
+          <img src="images/take_sim.png" alt="Isaac Sim View">
+          <div class="img-caption">moving the box to the target location</div>
+        </div>
+
+        <div class="img-item">
+          <img src="images/place_sim.png" alt="Isaac Sim View">
+          <div class="img-caption">placing the box at the target location</div>
         </div>
       </div>
 
@@ -274,10 +290,12 @@ while True:
         <li>Same <strong>Parquet + JPEG</strong> format as sim, enabling dataset mixing for co-training</li>
       </ul>
 
-      <video controls width="400">
-        <!-- <source src="https://www.w3schools.com/html/mov_bbb.mp4" type="video/mp4"> -->
-        <source src="./../docs/images/PXL_20260506_055417111.mp4" type="video/mp4">
+      <p>This video shows the data collection setup with the real hardware. The task is
+        teleoperation to pick and place the black colored cube on the other side of the table.
+      </p>
 
+      <video controls width="400">
+        <source src="images/syncro_hw_teleop.webm" type="video/mp4">
       </video>
 
       <h2 id="file-map">Project File Map</h2>
