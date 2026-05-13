@@ -78,7 +78,7 @@
         <div class="pipeline__step">
           <div class="pipeline__num">Stage 2</div>
           <div class="pipeline__name">Train</div>
-          <div class="pipeline__desc">GR00T N1.6 fine-tune, 50–200 demos, 10k steps</div>
+          <div class="pipeline__desc">GR00T N1.7 fine-tune, 50–200 demos, 10k steps</div>
         </div>
         <div class="pipeline__step">
           <div class="pipeline__num">Stage 3</div>
@@ -101,7 +101,7 @@
       <div class="mermaid">
         flowchart LR
         S1["<b>1. DATA CAPTURE</b><br />Sim & Hardware<br />Teleop + Cameras"]
-        S2["<b>2. TRAIN</b><br />GR00T N1.6<br />fine-tune"]
+        S2["<b>2. TRAIN</b><br />GR00T N1.7<br />fine-tune"]
         S3["<b>3. EVAL (sim)</b><br />Isaac Lab<br />rollouts"]
         S4["<b>4. EVAL (real)</b><br />Syncro5 arm<br />deployment"]
         S5["<b>5. CO-TRAIN</b><br />Sim + Real<br />dataset mix"]
@@ -134,7 +134,7 @@
             articulated robots, tiled cameras, and RL/IL environments.</div>
         </div>
         <div class="nvidia-stack__item">
-          <div class="nvidia-stack__name">GR00T N1.6</div>
+          <div class="nvidia-stack__name">GR00T N1.7</div>
           <div class="nvidia-stack__desc">3B-parameter vision-language-action foundation model. Fine-tuned on 50–200
             teleoperation demos for autonomous manipulation.</div>
         </div>
@@ -158,13 +158,13 @@
       <!-- What You'll Learn -->
       <h2 id="objectives">What You'll Learn</h2>
       <ul>
-        <li>Set up the Isaac Sim digital twin via <code>syncro_sim_server.py</code> with two cameras mimicking the real
+        <li>Set up the Isaac Sim digital twin via <code>syncro_sim_with_logger.py</code> with two cameras mimicking the real
           world setup.</li>
-        <li>Control the robot and gripper in sim using keyboard teleop via <code>syncro_sim_client.py</code>.</li>
+        <li>Control the robot and gripper in sim using keyboard teleop via <code>syncro_teleop_client.py</code>.</li>
         <li>Connect to the hardware's proprietary TCP/IP stack via ROS2 to command joint positions.</li>
         <li>Log synchronized robot state, actions, timestamps, and ego/external camera images for both routes.</li>
         <li>Collect datasets in the Parquet + JPEG format compatible with GR00T.</li>
-        <li>Fine-tune GR00T N1.6 vision-language-action models for manipulation tasks.</li>
+        <li>Fine-tune GR00T N1.7 vision-language-action models for manipulation tasks.</li>
       </ul>
 
       <!-- Quick Start -->
@@ -172,34 +172,19 @@
 
       <h3 id="launch-sim">1. Launch the Simulation Server</h3>
       <pre><code class="language-bash"># Syncro5 with gripper + data logging
-python server_data_logger.py --robot syncro5
-
-# Basic simulation (no logging)
-python syncro_sim_gripper_revolute.py --robot syncro5
+python syncro_sim_with_logger.py --robot syncro5
 
 # Custom host and port
-python server_data_logger.py --host 0.0.0.0 --port 8765</code></pre>
+python syncro_sim_with_logger.py --host 0.0.0.0 --port 8765</code></pre>
 
       <h3 id="connect-client">2. Connect a Teleop Client</h3>
-      <pre><code class="language-bash">python client_with_gripper.py</code></pre>
+      <pre><code class="language-bash">python syncro_teleop_client.py</code></pre>
 
       <div class="callout callout--tip">
         <div class="callout__title">💡 Tip</div>
         Keys <code>q w e r t y</code> increment joints 1–6; <code>a s d f g h</code> decrement them.
-        Press <code>u</code> to open the gripper, <code>j</code> to close it.
+        Press <code>p</code> to toggle the gripper.
       </div>
-
-      <h3 id="use-client-lib">3. Use the Python Client Library</h3>
-      <pre><code class="language-python">from syncro_sim_client import SyncroSimClient
-
-with SyncroSimClient(robot="syncro5") as client:
-    client.set_joint_positions({
-        "joint1": 0.0,
-        "joint2": -0.785,
-        "joint3":  1.571,
-    })
-    state = client.get_state()
-    print(state["joint_positions"])</code></pre>
 
       <!-- Navigation Cards -->
       <h2 id="explore">Explore the Documentation</h2>
@@ -226,7 +211,7 @@ with SyncroSimClient(robot="syncro5") as client:
         <a class="card card--nvidia" href="training.html">
           <div class="card__icon"></div>
           <div class="card__title">Training &amp; Evaluation</div>
-          <div class="card__desc">GR00T N1.6 fine-tuning, sim/real evaluation, co-training, and deployment.</div>
+          <div class="card__desc">GR00T N1.7 fine-tuning, sim/real evaluation, co-training, and deployment.</div>
         </a>
       </div>
 

@@ -13,7 +13,7 @@ Stream real robot joint positions into the simulation over WebSocket.
 
 | File | Purpose |
 |---|---|
-| `syncro_sim.py` | Isaac Sim server — simulation |
+| `syncro_sim_with_logger.py` | Isaac Sim server — simulation |
 | `syncro_sim_client.py` | Client library — lib that contains client Websocket APIs|
 | `test_joint_traj.py` | Send Websocket joint traj to sim to test |
 | `test_joint_gui.py` | Send joint pos through GUI to sim to test |

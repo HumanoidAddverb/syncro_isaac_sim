@@ -54,14 +54,14 @@
 
       <h2 id="overview">Overview</h2>
       <p>The pipeline produces datasets in a <strong>Parquet + JPEG</strong> format compatible with <strong>NVIDIA GR00T
-          N1.6</strong> fine-tuning. A unified logging architecture ensures that both simulation and hardware captures
+          N1.7</strong> fine-tuning. A unified logging architecture ensures that both simulation and hardware captures
         use the <strong>exact same schema</strong>, facilitating co-training strategies where sim data is augmented and
         mixed with real grounding data.</p>
 
       <div class="mermaid">
         flowchart LR
         subgraph SIM["Simulation Data Collection"]
-        SC["Teleop Client<br />(syncro_sim_client.py)"] -->|"Keyboard"| SS["Isaac Sim
+        SC["Teleop Client<br />(syncro_teleop_client.py)"] -->|"Keyboard"| SS["Isaac Sim
         Server<br />(syncro_sim_server.py)"]
         SS --> LOG["Data Logger"]
         end
@@ -92,11 +92,11 @@
       <p>Data collection in NVIDIA Isaac Sim requires two terminals:</p>
 
       <p><strong>Terminal 1 — Launch the Isaac Sim server with logging:</strong></p>
-      <pre><code class="language-bash">python server_data_logger.py --robot syncro5</code></pre>
+      <pre><code class="language-bash">python syncro_sim_with_logger.py --robot syncro5</code></pre>
       <p>Starts the NVIDIA Isaac Sim environment, WebSocket API, and <code>SimDataLogger</code> (30 Hz capture).</p>
 
       <p><strong>Terminal 2 — Connect the teleop client:</strong></p>
-      <pre><code class="language-bash">python client_with_gripper.py</code></pre>
+      <pre><code class="language-bash">python syncro_teleop_client.py</code></pre>
 
       <div class="callout callout--warning">
         <div class="callout__title">⚠️ Important</div>
@@ -116,7 +116,7 @@
         <li><strong>Timestamp</strong> — <code>time.time()</code> in seconds</li>
       </ul>
 
-      <pre><code class="language-python"># From server_data_logger.py — logging block
+      <pre><code class="language-python"># From syncro_sim_with_logger.py — logging block
 if step % 4 == 0:
     ego_rgb = wrist_cam.data.output["rgb"][0].cpu().numpy()
     ext_rgb = top_cam.data.output["rgb"][0].cpu().numpy()
@@ -233,10 +233,28 @@ logger = SimDataLogger(
         </thead>
         <tbody>
           <tr>
-            <td><code>frame_number</code></td>
+            <td><code>index</code></td>
+            <td>int</td>
+            <td>scalar</td>
+            <td>Sequential index of each entry in the parquet</td>
+          </tr>
+          <tr>
+            <td><code>episode_index</code></td>
+            <td>int</td>
+            <td>scalar</td>
+            <td>Index of the episode</td>
+          </tr>
+          <tr>
+            <td><code>frame_index</code></td>
             <td>int</td>
             <td>scalar</td>
             <td>Sequential frame index</td>
+          </tr>
+          <tr>
+            <td><code>task_index</code></td>
+            <td>int</td>
+            <td>scalar</td>
+            <td>Index of current task, as inferred from task.parquet</td>
           </tr>
           <tr>
             <td><code>timestamp</code></td>
@@ -245,7 +263,7 @@ logger = SimDataLogger(
             <td>Wall clock (seconds)</td>
           </tr>
           <tr>
-            <td><code>state.joint_positions</code></td>
+            <td><code>observation.state.joint_positions</code></td>
             <td>float32</td>
             <td>[7]</td>
             <td>7 (arm+gripper)</td>
@@ -257,16 +275,16 @@ logger = SimDataLogger(
             <td>Commanded joints</td>
           </tr>
           <tr>
-            <td><code>base.timestamp_us</code></td>
-            <td>int64</td>
-            <td>scalar</td>
-            <td>Microseconds</td>
+            <td><code>observation.images.ego</code></td>
+            <td>string</td>
+            <td>-</td>
+            <td>path to the images captured by ego camera</td>
           </tr>
           <tr>
-            <td><code>mode</code></td>
+            <td><code>observation.images.external</code></td>
             <td>string</td>
-            <td>—</td>
-            <td><code>"sim_teleop" or "hw_teleop"</code></td>
+            <td>-</td>
+            <td>path to the images captured by external camera</td>
           </tr>
         </tbody>
       </table>
@@ -279,7 +297,8 @@ logger = SimDataLogger(
 
       <h2 id="hw-collection">Hardware Data Collection <span class="tag tag--addverb">Addverb</span></h2>
       <p>For real-world demonstrations, data is collected directly on the hardware using a logic flow that mirrors the
-        <code>SimDataLogger</code>:</p>
+        <code>SimDataLogger</code>:
+      </p>
       <ul>
         <li><strong>TCP/IP Server</strong> — A proprietary stack runs on the robot which exposes a TCP/IP server.</li>
         <li><strong>ROS2 Control</strong> — Connection via ROS2 to command joint positions using a teleop client.</li>
@@ -292,7 +311,7 @@ logger = SimDataLogger(
       <h2 id="multi-episode">Multi-Episode Strategies</h2>
       <p>For GR00T training, you need <strong>50–200 demonstrations</strong>. Tips:</p>
       <ul>
-        <li>Each run of <code>server_data_logger.py</code> creates a new dataset directory</li>
+        <li>Each run of <code>syncro_sim_with_logger.py</code> creates a new dataset directory</li>
         <li>Task prompts are configured in <code>data_logger_config.yaml → task_ranges</code></li>
         <li>Use <code>discard()</code> to abandon bad episodes</li>
         <li>Multiple directories can be merged by concatenating Parquet files</li>

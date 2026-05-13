@@ -1,109 +1,284 @@
-import asyncio
-import websockets
 import json
-import time
-import sys
-import tty
-import termios
+import math
+import socket
+import struct
 import threading
+import time
+import base64
+import hashlib
+import os
+from typing import Dict, Optional
 
-START_TIME = time.monotonic()
-JOINT_NAMES = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"]
 
-# Shared state for keyboard input
-last_pressed_key = None
-key_lock = threading.Lock()
-_gripper_is_open = True   # tracks local gripper toggle state
+_REAL_KEYS = [
+    "shoulder_pan.pos",
+    "shoulder_lift.pos",
+    "elbow_flex.pos",
+    "wrist_flex.pos",
+    "wrist_roll.pos",
+    "gripper.pos",
+]
 
-def getch():
-    """Reads a single character from standard input (blocking)."""
-    fd = sys.stdin.fileno()
-    old_settings = termios.tcgetattr(fd)
-    try:
-        tty.setcbreak(sys.stdin.fileno())
-        # Block indefinitely until a key is pressed (0 CPU usage)
-        return sys.stdin.read(1)
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+SIM_JOINT_NAMES = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"]
 
-def keyboard_thread():
-    """Background thread to read keys and pass them to the main loop."""
-    global last_pressed_key
-    while True:
-        ch = getch()
-        with key_lock:
-            last_pressed_key = ch
-        if ch == '\x03': # Ctrl+C
-            break
+REAL_TO_SIM: Dict[str, str] = dict(zip(_REAL_KEYS, SIM_JOINT_NAMES))
 
-async def teleop():
-    global last_pressed_key, _gripper_is_open
-    async with websockets.connect("ws://localhost:8765") as ws:
+
+class SyncroSimClient:
+    def __init__(
+        self,
+        robot: str = "syncro5",
+        host: str = "localhost",
+        port: int = 8765,
+    ):
+        if robot not in ("syncro5", "syncro10"):
+            raise ValueError(f"robot must be 'syncro5' or 'syncro10', got {robot!r}")
+        self._host = host
+        self._port = port
+        self._sock: Optional[socket.socket] = None
+        self._lock = threading.Lock()   # serialises all socket I/O
+        self._joint_names = SIM_JOINT_NAMES
+        self._real_to_sim = REAL_TO_SIM
+
+    # ── Connection ────────────────────────────────────────────────────────────
+
+    def connect(self, timeout: float = 10.0) -> None:
+        """Connect to the Isaac Sim WebSocket server, retrying until *timeout*."""
+        deadline = time.monotonic() + timeout
         while True:
-            # 1. Always get the latest state from the server
-            await ws.send(json.dumps({"cmd": "get_state"}))
-            state = json.loads(await ws.recv())
-            current_positions = state.get("joint_positions", {})
-            
-            # 2. Check if a key was pressed in the background thread
-            ch = None
-            with key_lock:
-                if last_pressed_key:
-                    ch = last_pressed_key
-                    last_pressed_key = None  # Consume the key press
-            
-            if ch == '\x03': # Ctrl+C
+            try:
+                sock = socket.create_connection((self._host, self._port), timeout=2.0)
                 break
-                
-            # 3. If a key was pressed, calculate the new target and send it
-            if ch and ch in 'qwerty':
-                idx = 'qwerty'.index(ch)
-                if idx < len(JOINT_NAMES):
-                    jname = JOINT_NAMES[idx]
-                    new_target = float(current_positions.get(jname, 0.0)) + 0.03
-                    
-                    await ws.send(json.dumps({
-                        "cmd": "set_joints",
-                        "positions": {jname: new_target}
-                    }))
-                
-            elif ch and ch in 'asdfgh':
-                idx = 'asdfgh'.index(ch)
-                if idx < len(JOINT_NAMES):
-                    jname = JOINT_NAMES[idx]
-                    new_target = float(current_positions.get(jname, 0.0)) - 0.03
-                    
-                    await ws.send(json.dumps({
-                        "cmd": "set_joints",
-                        "positions": {jname: new_target}
-                    }))
-            
-            elif ch == 'p':
-                # Toggle gripper open ↔ closed
-                _gripper_is_open = not _gripper_is_open
-                new_state = "open" if _gripper_is_open else "closed"
-                await ws.send(json.dumps({
-                    "cmd": "set_gripper_state",
-                    "gripper_state": new_state,
-                }))
-                print(f"\n[GRIPPER] → {new_state}\n")
+            except (ConnectionRefusedError, OSError):
+                if time.monotonic() > deadline:
+                    raise TimeoutError(
+                        f"Could not connect to sim server at {self._host}:{self._port} "
+                        f"within {timeout}s. Is syncro_sim.py running?"
+                    )
+                time.sleep(0.25)
 
-            # Print current state
-            # joint_array = [round(float(current_positions.get(j, 0.0)), 2) for j in JOINT_NAMES]
-            # t = time.monotonic() - START_TIME
-            # print(f"[{t:.2f}] Current sim joints: {joint_array}      ", end='\r')
+        self._ws_handshake(sock)
+        self._sock = sock
+        self._sock.settimeout(None)   # switch to blocking mode
 
-            await asyncio.sleep(0.01)
+    def _ws_handshake(self, sock: socket.socket) -> None:
+        """Perform the HTTP → WebSocket upgrade handshake."""
+        key = base64.b64encode(os.urandom(16)).decode()
+        request = (
+            f"GET / HTTP/1.1\r\n"
+            f"Host: {self._host}:{self._port}\r\n"
+            f"Upgrade: websocket\r\n"
+            f"Connection: Upgrade\r\n"
+            f"Sec-WebSocket-Key: {key}\r\n"
+            f"Sec-WebSocket-Version: 13\r\n"
+            f"\r\n"
+        )
+        sock.sendall(request.encode())
 
-# Start keyboard thread
-k_thread = threading.Thread(target=keyboard_thread, daemon=True)
-k_thread.start()
+        # Read until the blank line that ends the HTTP headers.
+        buf = b""
+        while b"\r\n\r\n" not in buf:
+            chunk = sock.recv(4096)
+            if not chunk:
+                raise ConnectionError("Server closed connection during WebSocket handshake")
+            buf += chunk
 
-print("--- KEYBOARD CONTROL ACTIVE ---")
-print("Press 'qwerty' to ADD 0.03 to joint1-joint6 respectively")
-print("Press 'asdfgh' to SUBTRACT 0.03 from joint1-joint6 respectively")
-print("Press 'p'      to toggle gripper open/closed")
-print("Press Ctrl+C to exit")
-print("-------------------------------")
+        if b"101" not in buf:
+            raise ConnectionError(f"WebSocket upgrade failed:\n{buf[:300].decode(errors='replace')}")
 
-asyncio.run(teleop())
+        # Verify the server's accept key (optional but correct).
+        accept_key = base64.b64encode(
+            hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()
+        ).decode()
+        if accept_key.encode() not in buf:
+            raise ConnectionError("WebSocket accept key mismatch — unexpected server.")
+
+    def disconnect(self) -> None:
+        """Close the WebSocket connection."""
+        with self._lock:
+            if self._sock:
+                try:
+                    # Send a close frame (opcode 0x8, no payload).
+                    self._sock.sendall(b"\x88\x80" + bytes(4))
+                except OSError:
+                    pass
+                try:
+                    self._sock.close()
+                except OSError:
+                    pass
+                self._sock = None
+
+    # ── Low-level WebSocket framing ───────────────────────────────────────────
+
+    @staticmethod
+    def _encode_frame(payload: str) -> bytes:
+        """Encode a UTF-8 text payload as a masked WebSocket frame (client → server)."""
+        data   = payload.encode("utf-8")
+        length = len(data)
+        mask   = os.urandom(4)
+
+        header = bytearray()
+        header.append(0x81)                     # FIN=1, opcode=text
+        if length < 126:
+            header.append(0x80 | length)        # MASK=1
+        elif length < 65536:
+            header.append(0x80 | 126)
+            header += struct.pack(">H", length)
+        else:
+            header.append(0x80 | 127)
+            header += struct.pack(">Q", length)
+        header += mask
+
+        masked = bytearray(b ^ mask[i % 4] for i, b in enumerate(data))
+        return bytes(header) + bytes(masked)
+
+    def _decode_frame(self) -> Optional[str]:
+        """Read one WebSocket frame from the socket (blocking). Returns None on close."""
+        def recv_exact(n: int) -> bytes:
+            buf = b""
+            while len(buf) < n:
+                chunk = self._sock.recv(n - len(buf))
+                if not chunk:
+                    raise ConnectionError("Sim server closed the connection")
+                buf += chunk
+            return buf
+
+        header  = recv_exact(2)
+        opcode  = header[0] & 0x0F
+        is_mask = (header[1] & 0x80) != 0
+        length  = header[1] & 0x7F
+
+        if opcode == 0x8:   # close frame
+            return None
+        if opcode == 0x9:   # ping — send pong and loop
+            self._sock.sendall(b"\x8A\x00")
+            return self._decode_frame()
+
+        if length == 126:
+            length = struct.unpack(">H", recv_exact(2))[0]
+        elif length == 127:
+            length = struct.unpack(">Q", recv_exact(8))[0]
+
+        mask_key = recv_exact(4) if is_mask else b""
+        payload  = bytearray(recv_exact(length))
+        if is_mask:
+            for i in range(length):
+                payload[i] ^= mask_key[i % 4]
+
+        return payload.decode("utf-8")
+
+    # ── Public API ────────────────────────────────────────────────────────────
+
+    def set_joint_positions(self, positions: Dict[str, float]) -> None:
+        """
+        Stream joint position targets (radians) to the simulated robot.
+
+        Only the joints listed in *positions* are updated; unspecified joints
+        keep their current targets.
+
+        Valid joint names: Rotation | Pitch | Elbow | Wrist_Pitch | Wrist_Roll | Jaw
+        """
+        frame = self._encode_frame(json.dumps({"cmd": "set_joints", "positions": positions}))
+        with self._lock:
+            self._sock.sendall(frame)
+
+    def get_state(self) -> dict:
+        """
+        Request the current simulated joint state.
+
+        Returns:
+            {
+              "joint_positions":  {"Rotation": <rad>, ...},
+              "joint_velocities": {"Rotation": <rad/s>, ...},
+            }
+        """
+        frame = self._encode_frame(json.dumps({"cmd": "get_state"}))
+        with self._lock:
+            self._sock.sendall(frame)
+            raw = self._decode_frame()
+        if raw is None:
+            raise ConnectionError("Sim server closed the connection")
+        return json.loads(raw)
+
+    def mirror_real_robot(self, obs: Dict[str, float], degrees: bool = True) -> None:
+        """
+        Translate a real-robot observation dict into a sim joint command.
+
+        Parameters
+        ----------
+        obs:
+            LeRobot-style observation, e.g.::
+
+                {
+                    "shoulder_pan.pos":  -6.36,
+                    "shoulder_lift.pos": -51.95,
+                    "elbow_flex.pos":     16.73,
+                    "wrist_flex.pos":     89.25,
+                    "wrist_roll.pos":    -51.85,
+                    "gripper.pos":         0.0,
+                    # camera / other keys are silently ignored
+                }
+
+        degrees:
+            True (default) — values are in degrees and will be converted to radians.
+            False — values are already in radians.
+        """
+        positions: Dict[str, float] = {}
+        for real_key, sim_key in self._real_to_sim.items():
+            if real_key in obs:
+                val = obs[real_key]
+                positions[sim_key] = math.radians(val) if degrees else float(val)
+        if positions:
+            self.set_joint_positions(positions)
+
+    def set_joint_positions_degrees(self, positions_deg: Dict[str, float]) -> None:
+        """Convenience wrapper: accepts joint positions in degrees, converts to radians."""
+        self.set_joint_positions({k: math.radians(v) for k, v in positions_deg.items()})
+
+    def set_all_joints(self, values: list, degrees: bool = False) -> None:
+        """
+        Set all six joints by ordered list.
+
+        values: [joint1/J1, joint2/J2, joint3/J3, joint4/J4, joint5/J5, joint6/J6]
+                 (base-rotation, shoulder, elbow, wrist-pitch, wrist-roll, gripper)
+        """
+        if len(values) != len(self._joint_names):
+            raise ValueError(f"Expected {len(self._joint_names)} values, got {len(values)}")
+        pos = {name: (math.radians(v) if degrees else float(v))
+               for name, v in zip(self._joint_names, values)}
+        self.set_joint_positions(pos)
+
+    # ── Context manager ───────────────────────────────────────────────────────
+
+    def __enter__(self) -> "SyncroSimClient":
+        self.connect()
+        return self
+
+    def __exit__(self, *_) -> None:
+        self.disconnect()
+
+
+# ── CLI smoke-test ────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    import sys
+
+    robot = sys.argv[1] if len(sys.argv) > 1 else "syncro5"
+    host  = sys.argv[2] if len(sys.argv) > 2 else "localhost"
+    port  = int(sys.argv[3]) if len(sys.argv) > 3 else 8765
+
+    print(f"Connecting to ws://{host}:{port} ({robot}) …")
+    with SyncroSimClient(robot=robot, host=host, port=port) as client:
+        print("Connected.")
+
+        # Sweep base-rotation joint from -30° to +30° over 3 seconds.
+        base_joint = client._joint_names[0]
+        steps = 60
+        for i in range(steps + 1):
+            angle_deg = -30 + 60 * (i / steps)
+            client.set_joint_positions_degrees({base_joint: angle_deg})
+            time.sleep(3.0 / steps)
+
+        state = client.get_state()
+        print("Final sim state:")
+        for name, rad in state["joint_positions"].items():
+            print(f"  {name:15s} {math.degrees(rad):+.2f}°  ({rad:+.4f} rad)")

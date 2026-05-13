@@ -67,8 +67,8 @@
       <div class="mermaid">
         flowchart TB
         subgraph SIM["Simulation Data Collection"]
-        SC["Teleop Client<br />(syncro_sim_client.py)"]
-        SS["Isaac Sim Server<br />(syncro_sim_server.py)"]
+        SC["Teleop Client<br />(syncro_teleop_client.py)"]
+        SS["Isaac Sim Server<br />(syncro_sim_with_logger.py)"]
         CAM_SIM["Dual Cameras<br />(Ego & External)"]
         end
 
@@ -114,20 +114,11 @@
           </tr>
         </thead>
         <tbody>
+          
           <tr>
-            <td><code>syncro_sim.py</code></td>
-            <td>Basic 6-joint sim server</td>
-            <td>Ground + table + cubes scene, dual cameras, WebSocket API</td>
-          </tr>
-          <tr>
-            <td><code>syncro_sim_gripper_revolute.py</code></td>
+            <td><code>syncro_sim_with_logger.py</code></td>
             <td>Full sim with gripper joints</td>
-            <td>7 joints (6 arm + 1 gripper), mimic constraints, collision</td>
-          </tr>
-          <tr>
-            <td><code>server_data_logger.py</code></td>
-            <td>Sim + data logging</td>
-            <td>Everything above + SimDataLogger at 30 Hz, Parquet output</td>
+            <td>7 joints (6 arm + 1 gripper)</td>
           </tr>
         </tbody>
       </table>
@@ -260,7 +251,7 @@ while simulation_app.is_running():
       <p>Three types of clients connect to the sim server:</p>
 
       <h3 id="keyboard-teleop">Keyboard Teleop Client</h3>
-      <p><code>client_with_gripper.py</code> uses a background thread for non-blocking keyboard input and an async
+      <p><code>syncro_teleop_client.py</code> uses a background thread for non-blocking keyboard input and an async
         WebSocket loop at ~100 Hz:</p>
       <pre><code class="language-python"># Main loop at 100 Hz
 while True:
@@ -268,10 +259,8 @@ while True:
     ch = consume_key_press()
     if ch in 'qwerty':
         # Increment corresponding joint by 0.03 rad
-    elif ch == 'u':
-        # Open gripper
-    elif ch == 'j':
-        # Close gripper
+    elif ch == 'p':
+        # Toggle gripper
     await asyncio.sleep(0.01)</code></pre>
 
       <h3 id="python-client">Python Client Library</h3>
@@ -308,32 +297,16 @@ while True:
         </thead>
         <tbody>
           <tr>
-            <td><code>syncro_sim.py</code></td>
-            <td>Basic Isaac Sim server (6 joints, no gripper)</td>
-          </tr>
-          <tr>
-            <td><code>syncro_sim_gripper_revolute.py</code></td>
-            <td>Full sim server with 12 gripper joints</td>
-          </tr>
-          <tr>
-            <td><code>server_data_logger.py</code></td>
+            <td><code>syncro_sim_with_logger.py</code></td>
             <td>Sim server + integrated 30 Hz data logging</td>
           </tr>
           <tr>
-            <td><code>syncro_sim_client.py</code></td>
+            <td><code>syncro_teleop_client.py</code></td>
             <td>Python client library (SyncroSimClient class)</td>
-          </tr>
-          <tr>
-            <td><code>client_with_gripper.py</code></td>
-            <td>Keyboard teleop client with gripper controls</td>
           </tr>
           <tr>
             <td><code>sim_data_logger.py</code></td>
             <td>Background logging thread (Parquet + JPEG writer)</td>
-          </tr>
-          <tr>
-            <td><code>hw_data_logger.py</code></td>
-            <td>Hardware data logger (ROS2 + dual cameras)</td>
           </tr>
           <tr>
             <td><code>data_logger_config.yaml</code></td>
