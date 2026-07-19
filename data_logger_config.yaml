@@ -28,8 +28,8 @@ dof:
   arm_joint_dim: 7                 # joints_per_arm + gripper_dim
   base_obs_dim: 0                  # No mobile base — set 2 to match addverb_vla schema
   base_act_dim: 0
-  joint_dim: 9                     # arm_joint_dim + base_obs_dim (observation.state.joint_positions)
-  action_dim: 9                    # arm_joint_dim + base_act_dim (action.robot)
+  joint_dim: 7                     # arm_joint_dim + base_obs_dim = 7 + 0 (observation.state.joint_positions)
+  action_dim: 7                    # arm_joint_dim + base_act_dim = 7 + 0 (action.robot)
 
 # ── Image Settings ────────────────────────────────────────────
 images:

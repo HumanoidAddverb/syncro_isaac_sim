@@ -9,101 +9,164 @@ import threading
 
 START_TIME = time.monotonic()
 JOINT_NAMES = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"]
+_gripper_is_open = True
 
-# Shared state for keyboard input
-last_pressed_key = None
-key_lock = threading.Lock()
-_gripper_is_open = True   # tracks local gripper toggle state
 
 def getch():
-    """Reads a single character from standard input (blocking)."""
     fd = sys.stdin.fileno()
     old_settings = termios.tcgetattr(fd)
     try:
-        tty.setcbreak(sys.stdin.fileno())
-        # Block indefinitely until a key is pressed (0 CPU usage)
+        tty.setcbreak(fd)
         return sys.stdin.read(1)
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
-def keyboard_thread():
-    """Background thread to read keys and pass them to the main loop."""
-    global last_pressed_key
+
+def keyboard_thread(loop, queue):
     while True:
         ch = getch()
-        with key_lock:
-            last_pressed_key = ch
-        if ch == '\x03': # Ctrl+C
+        loop.call_soon_threadsafe(queue.put_nowait, ch)
+        if ch == '\x03':
             break
 
-async def teleop():
-    global last_pressed_key, _gripper_is_open
+
+async def drain_queue(queue):
+    """Discard any buffered keystrokes before starting a new phase."""
+    while not queue.empty():
+        try:
+            queue.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+
+
+async def teleop(queue):
+    global _gripper_is_open
+
+    episode_num = 0
+
     async with websockets.connect("ws://localhost:8765") as ws:
         while True:
-            # 1. Always get the latest state from the server
-            await ws.send(json.dumps({"cmd": "get_state"}))
-            state = json.loads(await ws.recv())
-            current_positions = state.get("joint_positions", {})
-            
-            # 2. Check if a key was pressed in the background thread
-            ch = None
-            with key_lock:
-                if last_pressed_key:
-                    ch = last_pressed_key
-                    last_pressed_key = None  # Consume the key press
-            
-            if ch == '\x03': # Ctrl+C
-                break
-                
-            # 3. If a key was pressed, calculate the new target and send it
-            if ch and ch in 'qwerty':
-                idx = 'qwerty'.index(ch)
-                if idx < len(JOINT_NAMES):
-                    jname = JOINT_NAMES[idx]
-                    new_target = float(current_positions.get(jname, 0.0)) + 0.03
-                    
-                    await ws.send(json.dumps({
-                        "cmd": "set_joints",
-                        "positions": {jname: new_target}
-                    }))
-                
-            elif ch and ch in 'asdfgh':
-                idx = 'asdfgh'.index(ch)
-                if idx < len(JOINT_NAMES):
-                    jname = JOINT_NAMES[idx]
-                    new_target = float(current_positions.get(jname, 0.0)) - 0.03
-                    
-                    await ws.send(json.dumps({
-                        "cmd": "set_joints",
-                        "positions": {jname: new_target}
-                    }))
-            
-            elif ch == 'p':
-                # Toggle gripper open ↔ closed
-                _gripper_is_open = not _gripper_is_open
-                new_state = "open" if _gripper_is_open else "closed"
-                await ws.send(json.dumps({
-                    "cmd": "set_gripper_state",
-                    "gripper_state": new_state,
-                }))
-                print(f"\n[GRIPPER] → {new_state}\n")
+            episode_num += 1
+            recording = []
+            await drain_queue(queue)
 
-            # Print current state
-            # joint_array = [round(float(current_positions.get(j, 0.0)), 2) for j in JOINT_NAMES]
-            # t = time.monotonic() - START_TIME
-            # print(f"[{t:.2f}] Current sim joints: {joint_array}      ", end='\r')
+            print(f"\n=== Episode {episode_num} started ===")
+            print("Controls: qwerty/asdfgh = joints ±0.03 | p = gripper | SPACE = end episode | Ctrl+C = quit")
 
-            await asyncio.sleep(0.01)
+            # ── Teleop loop for one episode ──────────────────────────────────
+            while True:
+                await ws.send(json.dumps({"cmd": "get_state"}))
+                state = json.loads(await ws.recv(
+                    idx = 'asdfgh'.index(ch)
+                    if idx < len(JOINT_NAMES):
+                        jname = JOINT_NAMES[idx]
+                        new_target = float(current_positions.get(jname, 0.0)) - 0.03
+                        await ws.send(json.dumps({"cmd": "set_joints", "positions": {jname: new_target}}))
 
-# Start keyboard thread
-k_thread = threading.Thread(target=keyboard_thread, daemon=True)
-k_thread.start()
+                elif ch == 'p':
+                    _gripper_is_open = not _gripper_is_open
+                    new_state = "open" if _gripper_is_open else "closed"
+                    await ws.send(json.dumps({"cmd": "set_gripper_state", "gripper_state": new_state}))
+                    print(f"\n[GRIPPER] → {new_state}\n")
 
-print("--- KEYBOARD CONTROL ACTIVE ---")
-print("Press 'qwerty' to ADD 0.03 to joint1-joint6 respectively")
-print("Press 'asdfgh' to SUBTRACT 0.03 from joint1-joint6 respectively")
-print("Press 'p'      to toggle gripper open/closed")
-print("Press Ctrl+C to exit")
-print("-------------------------------")
+                await asyncio.sleep(0.01)))
+                current_positions = state.get("joint_positions", {})
 
-asyncio.run(teleop())
+                # Non-blocking key check
+                ch = None
+                try:
+                    ch = queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+
+                if ch == '\x03':
+                    print("\nCtrl+C — exiting.")
+                    return
+
+                if ch == ' ':
+                    break  # end this episode
+
+                # Record current frame
+                recording.append({
+                    "time": round(time.monotonic() - START_TIME, 4),
+                    "joint_positions": {k: round(float(v), 6) for k, v in current_positions.items()},
+                    "gripper_open": _gripper_is_open,
+                })
+
+                if ch and ch in 'qwerty':
+                    idx = 'qwerty'.index(ch)
+                    if idx < len(JOINT_NAMES):
+                        jname = JOINT_NAMES[idx]
+                        new_target = float(current_positions.get(jname, 0.0)) + 0.03
+                        await ws.send(json.dumps({"cmd": "set_joints", "positions": {jname: new_target}}))
+
+                elif ch and ch in 'asdfgh':
+                    idx = 'asdfgh'.index(ch)
+                    if idx < len(JOINT_NAMES):
+                        jname = JOINT_NAMES[idx]
+                        new_target = float(current_positions.get(jname, 0.0)) - 0.03
+                        await ws.send(json.dumps({"cmd": "set_joints", "positions": {jname: new_target}}))
+
+                elif ch == 'p':
+                    _gripper_is_open = not _gripper_is_open
+                    new_state = "open" if _gripper_is_open else "closed"
+                    await ws.send(json.dumps({"cmd": "set_gripper_state", "gripper_state": new_state}))
+                    print(f"\n[GRIPPER] → {new_state}\n")
+
+                await asyncio.sleep(0.01)
+
+            # ── End of episode: ask to save ──────────────────────────────────
+            print(f"\n--- Episode {episode_num} ended  ({len(recording)} frames recorded) ---")
+            print("Save this episode?  Press  y = save   n = discard")
+
+            await drain_queue(queue)
+            while True:
+                ch = await queue.get()
+                if ch == '\x03':
+                    print("\nCtrl+C — exiting.")
+                    return
+                if ch == 'y':
+                    filename = f"episode_{episode_num:04d}.json"
+                    with open(filename, 'w') as f:
+                        json.dump({"episode": episode_num, "frames": recording}, f, indent=2)
+                    print(f"[SAVED] → {filename}")
+                    break
+                if ch == 'n':
+                    print("[DISCARDED]")
+                    break
+
+            # ── Wait for user to start the next episode ──────────────────────
+            print("\nPress any key to start the next episode  (Ctrl+C to quit)...")
+            await drain_queue(queue)
+            ch = await queue.get()
+            if ch == '\x03':
+                print("\nCtrl+C — exiting.")
+                return
+
+            # Reset scene: robot to home (all joints = 0) + blocks to initial poses
+            print("[RESET] Resetting scene...")
+            await ws.send(json.dumps({"cmd": "reset_scene"}))
+            await ws.recv()  # wait for server ack before starting
+            _gripper_is_open = True
+            await asyncio.sleep(0.5)  # let physics settle
+            print("[RESET] Done.")
+
+async def main():
+    queue = asyncio.Queue()
+    loop = asyncio.get_event_loop()
+
+    k_thread = threading.Thread(target=keyboard_thread, args=(loop, queue), daemon=True)
+    k_thread.start()
+
+    print("--- SYNCRO TELEOP CLIENT ---")
+    print("qwerty  → ADD  0.03 to joint1-6")
+    print("asdfgh  → SUB  0.03 from joint1-6")
+    print("p       → toggle gripper open/closed")
+    print("SPACE   → end current episode")
+    print("Ctrl+C  → quit")
+    print("----------------------------")
+
+    await teleop(queue)
+
+
+asyncio.run(main())

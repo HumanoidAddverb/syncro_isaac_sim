@@ -78,9 +78,10 @@ bad_obs = 0
 bad_action = 0
 bad_ts = 0
 
-for _, row in df.iterrows():
+obs_col = "observation.state.joint_positions" if "observation.state.joint_positions" in df.columns else "state.joint_positions"
 
-    if has_nan(row["state.joint_positions"]):
+for _, row in df.iterrows():
+    if has_nan(row[obs_col]):
         bad_obs += 1
 
     if has_nan(row["action.robot"]):

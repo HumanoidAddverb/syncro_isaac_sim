@@ -90,6 +90,14 @@ def _on_shutdown(event):
 app = omni.kit.app.get_app()
 _shutdown_sub = app.get_shutdown_event_stream().create_subscription_to_pop(_on_shutdown)
 
+def _on_sigterm(signum, frame):
+    print("[SIM] SIGTERM received — finalizing dataset...")
+    global _STOP_REQUESTED
+    _STOP_REQUESTED = True
+    _safe_finalize()
+
+signal.signal(signal.SIGTERM, _on_sigterm)
+
 # ── Post-launch imports (omniverse must be running first) ─────────────────────
 import torch  # noqa: E402
 import numpy as np  # noqa: E402
@@ -113,6 +121,7 @@ _state_lock = threading.Lock()
 _latest_state: dict = {"joint_positions": {}, "joint_velocities": {}}
 _gripper_state: str = "open"
 _gripper_lock = threading.Lock()
+_reset_requested = threading.Event()
 START_TIME = time.monotonic()
 
 # ── Two-finger gripper joint positions ───────────────────────────────────────
@@ -182,6 +191,10 @@ try:
                     _cmd_queue.put_nowait(positions)
                 else:
                     await websocket.send(json.dumps({"error": f"invalid gripper_state: {new_state!r}. Use 'open' or 'closed'"}))
+
+            elif cmd == "reset_scene":
+                _reset_requested.set()
+                await websocket.send(json.dumps({"status": "ok"}))
 
             else:
                 await websocket.send(json.dumps({"error": f"unknown cmd: {cmd!r}"}))
@@ -545,6 +558,14 @@ def main():
     print(f"[SIM] Joints : {list(joint_idx.keys())}")
     print(f"[SIM] Bodies : {robot.data.body_names}")
 
+    # Capture initial world-frame states of dynamic cubes for scene reset
+    cube_c: RigidObject = scene["cube_c"]
+    cube_d: RigidObject = scene["cube_d"]
+    cube_e: RigidObject = scene["cube_e"]
+    cube_c_init = cube_c.data.root_state_w.clone()
+    cube_d_init = cube_d.data.root_state_w.clone()
+    cube_e_init = cube_e.data.root_state_w.clone()
+
     dataset_root = os.path.expanduser(f"~/vla_dataset/syncro_5/syncro_sim_{int(time.time())}")
 
     sim_logger = SimDataLogger(
@@ -627,6 +648,20 @@ def main():
 
     try:
         while simulation_app.is_running() and not _STOP_REQUESTED:
+
+            # Scene reset: teleport robot home and restore dynamic cubes
+            if _reset_requested.is_set():
+                _reset_requested.clear()
+                target_pos.zero_()
+                robot.write_joint_state_to_sim(
+                    torch.zeros_like(target_pos),
+                    torch.zeros_like(target_pos),
+                )
+                cube_c.write_root_state_to_sim(cube_c_init)
+                cube_d.write_root_state_to_sim(cube_d_init)
+                cube_e.write_root_state_to_sim(cube_e_init)
+                with _gripper_lock:
+                    _gripper_state = "open"
 
             if step != 0:
                 # Pull latest command (drop stale if queue backed up).
